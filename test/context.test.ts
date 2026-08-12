@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { symlinkSync } from "node:fs";
+import { realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { discoverCheckout } from "../src/git.ts";
 import {
@@ -126,11 +126,20 @@ describe("session context", () => {
 });
 
 describe("git discovery", () => {
-  test("gets the main repository root from a linked worktree", () => {
+  test("gets the main repository root from worktree metadata", () => {
     const checkout = discoverCheckout(process.cwd(), true)!;
+    const worktrees = Bun.spawnSync(["git", "worktree", "list", "--porcelain"], {
+      cwd: process.cwd(),
+    });
+    const mainWorktree = worktrees.stdout.toString().split("\n", 1)[0]!.slice("worktree ".length);
+    const branch = Bun.spawnSync(["git", "branch", "--show-current"], {
+      cwd: process.cwd(),
+    })
+      .stdout.toString()
+      .trim();
     expect(checkout.worktreePath).toBe(process.cwd());
-    expect(checkout.repoRoot).not.toBe(checkout.worktreePath);
-    expect(checkout.branch).toBe("feature/related-ledger");
+    expect(checkout.repoRoot).toBe(realpathSync(mainWorktree));
+    expect(checkout.branch).toBe(branch);
   });
 
   test("normalizes a symlink path with realpath", () => {
