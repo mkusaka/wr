@@ -46,6 +46,14 @@ wr terminals --task MAL-123
 wr runs focus <session-id>
 ```
 
+Use `wr --help` for command discovery. There is no `wr help` subcommand. The
+`link` command currently supports only workpads; it does not store arbitrary
+URLs such as Confluence links:
+
+```bash
+wr link workpad ./workpad.md --task MAL-123
+```
+
 Resource commands use the current repository inside Git and the global ledger outside Git. Use `--global` explicitly when a repository-local command needs global results. Filter tasks with `wr tasks --status active`.
 
 Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, `wr terminals`, and `wr repos` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the raw Codex thread ID or Claude session ID to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--limit NUMBER` to bound ordered results, `--json FIELD,...` for structured output, and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
