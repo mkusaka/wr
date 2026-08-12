@@ -50,6 +50,7 @@ describe("resource queries", () => {
       "prs",
       "branches",
       "terminals",
+      "repos",
     ];
     for (const resource of resources) {
       expect(queryResource(db!, resource, { task: "MAL-123" })).toHaveLength(1);
@@ -96,6 +97,23 @@ describe("resource queries", () => {
     db!.query("UPDATE tasks SET updated_at = '2026-01-01' WHERE linear_issue_id = 'MAL-123'").run();
     db!.query("UPDATE tasks SET updated_at = '2025-01-01' WHERE linear_issue_id = 'MAL-OLD'").run();
     expect(queryResource(db!, "tasks", {})[0]?.linearIssueId).toBe("MAL-123");
+  });
+
+  test("summarizes repositories and limits ordered resources", () => {
+    const { current } = relatedRecords();
+    const repositories = queryResource(db!, "repos", {});
+    expect(repositories).toEqual([
+      expect.objectContaining({
+        repoRoot: current.checkout!.repoRoot,
+        status: "active",
+        worktreeCount: 1,
+        taskCount: 1,
+        activeExecutions: 1,
+      }),
+    ]);
+    startTask(db!, current, "MAL-SECOND", {});
+    expect(queryResource(db!, "tasks", { limit: 1 })).toHaveLength(1);
+    expect(queryResource(db!, "repos", { status: "inactive" })).toHaveLength(0);
   });
 });
 
@@ -189,6 +207,51 @@ describe("resource commands", () => {
     expect(JSON.parse(task.stdout.toString())).toEqual([{ linearIssueId: "MAL-123" }]);
     expect(session.exitCode).toBe(0);
     expect(JSON.parse(session.stdout.toString())).toEqual([{ session: "codex:resource-session" }]);
+  });
+
+  test("accepts --limit and reports repository opt-in", () => {
+    relatedRecords();
+    const result = Bun.spawnSync(
+      ["bun", "src/cli.ts", "repos", "--global", "--limit", "1", "--json", "repoRoot,enabled"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          WR_DB_PATH: db!.filename,
+          XDG_CONFIG_HOME: tempDir("wr-repos-config"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual([
+      { repoRoot: expect.any(String), enabled: false },
+    ]);
+  });
+
+  test("doctor reports database, repository, commands, and hooks", () => {
+    relatedRecords();
+    const home = tempDir("wr-doctor-home");
+    const result = Bun.spawnSync([process.execPath, "src/cli.ts", "doctor"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        HOME: home,
+        CLAUDE_CONFIG_DIR: join(home, ".claude"),
+        CODEX_HOME: join(home, ".codex"),
+        XDG_CONFIG_HOME: join(home, ".config"),
+        WR_DB_PATH: db!.filename,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    const output = result.stdout.toString();
+    expect(output).toContain("quick_check=ok foreign_key_violations=0");
+    expect(output).toContain("repository path=");
+    expect(output).toContain("commands gh=");
+    expect(output).toContain("hooks claude=missing codex=missing");
   });
 
   test("reports a missing jq executable", () => {

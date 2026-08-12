@@ -38,6 +38,8 @@ export const ExecutionStatusSchema = v.picklist(["active", "finished", "abandone
 
 export const RunStatusSchema = v.picklist(["active", "ended"]);
 
+export const RepositoryStatusSchema = v.picklist(["active", "inactive"]);
+
 export const ResourceNameSchema = v.picklist([
   "tasks",
   "sessions",
@@ -48,6 +50,7 @@ export const ResourceNameSchema = v.picklist([
   "prs",
   "branches",
   "terminals",
+  "repos",
 ]);
 
 export const ITermSessionListSchema = v.array(v.object({ id: NonEmptyStringSchema }));

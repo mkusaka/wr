@@ -5,16 +5,19 @@ import { join } from "node:path";
 import {
   addPullRequest,
   addWorkpadLink,
+  cancelTask,
   doneTask,
   findRunTerminal,
   listPullRequests,
   listRuns,
   listTasks,
   removePullRequest,
+  removeWorkpadLink,
   show,
   startTask,
   syncPullRequests,
 } from "../src/commands.ts";
+import { enableRepository } from "../src/config.ts";
 import { tempDir, testContext, testDb } from "./helpers.ts";
 
 let db: Database | null = null;
@@ -63,6 +66,34 @@ describe("task lifecycle", () => {
     doneTask(db, current, "TASK-REOPEN");
     expect(doneTask(db, current, "TASK-REOPEN")).toMatchObject({ finished: 0, abandoned: 0 });
     expect(startTask(db, current, "TASK-REOPEN", {}).reopened).toBe(true);
+  });
+
+  test("cancel abandons only the selected task executions", () => {
+    db = testDb();
+    const session1 = testContext(db, "cancel-session-1");
+    const session2 = testContext(db, "cancel-session-2");
+    startTask(db, session1, "TASK-CANCEL", {});
+    startTask(db, session2, "TASK-CANCEL", {});
+    startTask(db, session1, "TASK-KEEP", {});
+
+    expect(cancelTask(db, null, "TASK-CANCEL")).toEqual({
+      issue: "TASK-CANCEL",
+      abandoned: 2,
+    });
+    expect(
+      db.query("SELECT status FROM tasks WHERE linear_issue_id = 'TASK-CANCEL'").get(),
+    ).toEqual({ status: "cancelled" });
+    expect(
+      (
+        db
+          .query(
+            `SELECT e.status FROM executions e JOIN tasks t ON t.id = e.task_id
+              WHERE t.linear_issue_id = 'TASK-KEEP'`,
+          )
+          .get() as { status: string }
+      ).status,
+    ).toBe("active");
+    expect(cancelTask(db, null, "TASK-CANCEL").abandoned).toBe(0);
   });
 
   test("an old active run is displayed as stale without being closed", () => {
@@ -123,6 +154,47 @@ describe("task lifecycle", () => {
     ).toBe(1);
     expect(show(db, current, {})).toContain(`workpad: ${realpathSync(workpad)}`);
     expect(show(db, null, { task: "TASK-SHOW" })).toContain("Execution active: codex:show-session");
+    expect(removeWorkpadLink(db, null, workpad, "TASK-SHOW")).toEqual({
+      issue: "TASK-SHOW",
+      ref: realpathSync(workpad),
+    });
+    expect(() => removeWorkpadLink(db!, null, workpad, "TASK-SHOW")).toThrow(
+      "Workpad is not linked",
+    );
+  });
+
+  test("CLI cancels a task and removes a workpad relationship", () => {
+    db = testDb();
+    const configHome = tempDir("wr-command-config");
+    const env = {
+      ...process.env,
+      CODEX_THREAD_ID: "command-session",
+      XDG_CONFIG_HOME: configHome,
+      WR_DB_PATH: db.filename,
+    };
+    enableRepository(process.cwd(), env);
+    const workpad = join(tempDir("wr-command-workpad"), "workpad.md");
+    writeFileSync(workpad, "# Workpad\n");
+    for (const args of [
+      ["task", "start", "TASK-COMMAND"],
+      ["link", "workpad", workpad, "--task", "TASK-COMMAND"],
+      ["link", "remove", "workpad", workpad, "--task", "TASK-COMMAND"],
+      ["task", "cancel", "TASK-COMMAND"],
+    ]) {
+      const result = Bun.spawnSync([process.execPath, "src/cli.ts", ...args], {
+        cwd: process.cwd(),
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+    }
+    expect(
+      db.query("SELECT status FROM tasks WHERE linear_issue_id = 'TASK-COMMAND'").get(),
+    ).toEqual({ status: "cancelled" });
+    expect(
+      (db.query("SELECT COUNT(*) AS count FROM task_links").get() as { count: number }).count,
+    ).toBe(0);
   });
 });
 

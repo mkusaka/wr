@@ -9,7 +9,8 @@ export type ResourceName =
   | "links"
   | "prs"
   | "branches"
-  | "terminals";
+  | "terminals"
+  | "repos";
 
 export type ResourceFilters = {
   task?: string;
@@ -25,6 +26,7 @@ export type ResourceFilters = {
   pullRequest?: number;
   status?: string;
   kind?: string;
+  limit?: number;
 };
 
 export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
@@ -83,6 +85,15 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
     "pane",
     "lastSeenAt",
   ],
+  repos: [
+    "repoRoot",
+    "status",
+    "enabled",
+    "worktreeCount",
+    "taskCount",
+    "activeExecutions",
+    "updatedAt",
+  ],
 };
 
 export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
@@ -95,6 +106,15 @@ export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
   prs: ["repo", "number", "linearIssueId", "headBranch", "baseBranch", "url"],
   branches: ["repoRoot", "branch", "worktreePath"],
   terminals: ["terminalId", "session", "runId", "status", "pane", "lastSeenAt"],
+  repos: [
+    "repoRoot",
+    "status",
+    "enabled",
+    "worktreeCount",
+    "taskCount",
+    "activeExecutions",
+    "updatedAt",
+  ],
 };
 
 const RELATIONSHIPS = `WITH relationships AS (
@@ -203,6 +223,8 @@ function baseQuery(resource: ResourceName): string {
                      sr.last_seen_at AS lastSeenAt
                 FROM session_runs sr JOIN cli_sessions cs ON cs.id = sr.cli_session_id
                WHERE sr.iterm_session_id IS NOT NULL ORDER BY sr.last_seen_at DESC`;
+    case "repos":
+      throw new Error("Repository resources use their relationship query");
   }
 }
 
@@ -236,7 +258,56 @@ function relatedSelect(resource: ResourceName): string {
       return `repoRoot, branch, worktreePath`;
     case "terminals":
       return `itermSessionId, runId, sessionId, session, runStatus AS status, lastSeenAt`;
+    case "repos":
+      throw new Error("Repository resources use their relationship query");
   }
+}
+
+function queryRepositories(db: Database, filters: ResourceFilters): Array<Record<string, unknown>> {
+  return db
+    .query(
+      `SELECT gc.repo_root AS repoRoot,
+              CASE WHEN COUNT(DISTINCT CASE WHEN e.status = 'active' THEN e.id END) > 0
+                   THEN 'active' ELSE 'inactive' END AS status,
+              COUNT(DISTINCT gc.worktree_path) AS worktreeCount,
+              COUNT(DISTINCT e.task_id) AS taskCount,
+              COUNT(DISTINCT CASE WHEN e.status = 'active' THEN e.id END) AS activeExecutions,
+              MAX(COALESCE(t.updated_at, e.finished_at, e.started_at, gc.created_at)) AS updatedAt
+         FROM git_checkouts gc
+         LEFT JOIN executions e ON e.checkout_id = gc.id
+         LEFT JOIN tasks t ON t.id = e.task_id
+         LEFT JOIN cli_sessions cs ON cs.id = e.cli_session_id
+         LEFT JOIN session_runs sr ON sr.id = e.session_run_id
+         LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
+         LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
+         LEFT JOIN task_links tl ON tl.task_id = t.id
+        WHERE ($task IS NULL OR t.linear_issue_id = $task)
+          AND ($session IS NULL OR cs.external_session_id = $session)
+          AND ($run IS NULL OR sr.id = $run)
+          AND ($checkout IS NULL OR gc.id = $checkout)
+          AND ($execution IS NULL OR e.id = $execution)
+          AND ($link IS NULL OR tl.id = $link)
+          AND ($terminal IS NULL OR sr.iterm_session_id = $terminal OR sr.iterm_session_id LIKE '%:' || $terminal)
+          AND ($repoRoot IS NULL OR gc.repo_root = $repoRoot)
+          AND ($worktreePath IS NULL OR gc.worktree_path = $worktreePath)
+          AND ($branch IS NULL OR gc.branch = $branch)
+          AND ($pullRequest IS NULL OR pr.number = $pullRequest)
+        GROUP BY gc.repo_root
+        ORDER BY updatedAt DESC, repoRoot`,
+    )
+    .all({
+      task: filters.task ?? null,
+      session: filters.session ?? null,
+      run: filters.run ?? null,
+      checkout: filters.checkout ?? null,
+      execution: filters.execution ?? null,
+      link: filters.link ?? null,
+      terminal: filters.terminal ?? null,
+      repoRoot: filters.repoRoot ?? null,
+      worktreePath: filters.worktreePath ?? null,
+      branch: filters.branch ?? null,
+      pullRequest: filters.pullRequest ?? null,
+    }) as Array<Record<string, unknown>>;
 }
 
 function hasRelationshipFilter(filters: ResourceFilters): boolean {
@@ -261,7 +332,9 @@ export function queryResource(
   filters: ResourceFilters,
 ): Array<Record<string, unknown>> {
   let rows: Array<Record<string, unknown>>;
-  if (hasRelationshipFilter(filters)) {
+  if (resource === "repos") {
+    rows = queryRepositories(db, filters);
+  } else if (hasRelationshipFilter(filters)) {
     const select = relatedSelect(resource);
     const nonNull = select.split(",")[0]!.trim().split(" ")[0]!;
     rows = db
@@ -307,10 +380,12 @@ export function queryResource(
     links: "createdAt",
     prs: "createdAt",
     terminals: "lastSeenAt",
+    repos: "updatedAt",
   };
   const field = orderField[resource];
   if (field) {
     rows.sort((left, right) => String(right[field] ?? "").localeCompare(String(left[field] ?? "")));
   }
+  if (filters.limit !== undefined) rows = rows.slice(0, filters.limit);
   return rows;
 }

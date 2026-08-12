@@ -69,14 +69,17 @@ wr config enable .
 
 wr task start MAL-123 --title "Task title" --worktree .
 wr task done MAL-123
+wr task cancel MAL-123
 
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-123 --parent 123
 wr pr remove 123 --task MAL-123
 wr sync
 wr link workpad ./workpad.md --task MAL-123
+wr link remove workpad ./workpad.md --task MAL-123
 
 wr show
+wr doctor
 wr show --task MAL-123
 wr show --worktree .
 wr tasks
@@ -88,6 +91,8 @@ wr checkouts --session <session-id>
 wr executions --branch feature/foo
 wr links --pr 123
 wr prs
+wr repos
+wr repos --global --status active
 wr branches --task MAL-123
 wr terminals --task MAL-123
 wr runs focus <session-id>
@@ -96,13 +101,18 @@ wr terminals focus <iterm-session-id>
 wr tasks --json linearIssueId,status,title
 wr tasks --json linearIssueId,status --jq '.[] | select(.status == "active")'
 wr tasks --json
+wr tasks --limit 20
 ```
 
 Commands that omit a task infer it only when the current checkout has exactly one active task. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
 
 `wr task done` closes executions for the selected task only. Executions in the current CLI session become `finished`; executions in other sessions become `abandoned`. Executions for other tasks in the same session remain untouched.
 
-Resource commands are scoped to the current repository when run inside a Git checkout and use the global ledger otherwise. Pass `--global` to override repository scoping or `--repo PATH` to select a repository explicitly. All resource commands accept relationship filters: `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--worktree`, `--branch`, and `--pr`. `--session` accepts a Codex thread ID or Claude session ID without a CLI prefix. If the same external ID exists for both clients, the command reports ambiguity. `--task` accepts the Linear issue identifier stored in the ledger. Tasks are ordered by `updated_at` descending.
+`wr task cancel` marks the selected task as `cancelled` and abandons all of its active executions. It is idempotent and does not alter executions for other tasks. `wr link remove workpad` removes only the relationship; it does not delete the workpad file.
+
+Resource commands are scoped to the current repository when run inside a Git checkout and use the global ledger otherwise. Pass `--global` to override repository scoping or `--repo PATH` to select a repository explicitly. All resource commands accept relationship filters: `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--worktree`, `--branch`, and `--pr`. `--session` accepts a Codex thread ID or Claude session ID without a CLI prefix. If the same external ID exists for both clients, the command reports ambiguity. `--task` accepts the Linear issue identifier stored in the ledger. Use `--limit NUMBER` to bound the filtered and ordered results. Tasks are ordered by `updated_at` descending.
+
+`wr repos` groups stored checkouts by repository and shows worktree, task, and active execution counts. Its `active` status means that the repository has at least one active execution; otherwise it is `inactive`. The `enabled` field reflects the current opt-in configuration.
 
 Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` to filter that JSON with the installed `jq` command. Pass `--json` without a value to list the available fields for a resource.
 
@@ -111,3 +121,5 @@ Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` t
 `wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Executions, so no GitHub or Linear network lookup is performed.
 
 When `it2` is available, `wr runs` marks each pane as `live` or `closed`. Use `wr runs focus CLI:ID` or `wr runs focus RUN_ID` to focus its active iTerm2 pane. Without `it2`, pane status is `unknown`.
+
+`wr doctor` performs read-only database integrity and foreign-key checks, reports repository opt-in and current session registration, checks optional command availability, and verifies that both lifecycle hook commands appear in the Claude Code and Codex user hook files.

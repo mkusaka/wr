@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import * as v from "valibot";
 import type { CurrentContext } from "./context.ts";
 import { ensureCheckout } from "./context.ts";
@@ -138,6 +139,27 @@ export function doneTask(
       .run({ taskId: task.id, sessionId: current.cliSessionId }).changes;
   }).immediate();
   return { issue: task.linear_issue_id, finished, abandoned };
+}
+
+export function cancelTask(
+  db: Database,
+  current: CurrentContext | null,
+  issue?: string,
+): { issue: string; abandoned: number } {
+  const task = issue ? findTask(db, issue) : inferTask(db, current?.checkoutId ?? null);
+  let abandoned = 0;
+  db.transaction(() => {
+    db.query(
+      "UPDATE tasks SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $id",
+    ).run({ id: task.id });
+    abandoned = db
+      .query(
+        `UPDATE executions SET status = 'abandoned', finished_at = CURRENT_TIMESTAMP
+          WHERE task_id = $taskId AND status = 'active'`,
+      )
+      .run({ taskId: task.id }).changes;
+  }).immediate();
+  return { issue: task.linear_issue_id, abandoned };
 }
 
 function runGh(args: string[], cwd?: string): string {
@@ -415,6 +437,21 @@ export function addWorkpadLink(
      VALUES ($id, $taskId, 'workpad', $ref)
      ON CONFLICT(task_id, kind, ref) DO NOTHING`,
   ).run({ id: newId(), taskId: task.id, ref });
+  return { issue: task.linear_issue_id, ref };
+}
+
+export function removeWorkpadLink(
+  db: Database,
+  current: CurrentContext | null,
+  path: string,
+  issue?: string,
+): { issue: string; ref: string } {
+  const ref = existsSync(path) ? realpathSync(path) : resolve(path);
+  const task = issue ? findTask(db, issue) : inferTask(db, current?.checkoutId ?? null);
+  const removed = db
+    .query("DELETE FROM task_links WHERE task_id = $taskId AND kind = 'workpad' AND ref = $ref")
+    .run({ taskId: task.id, ref }).changes;
+  if (removed === 0) throw new Error(`Workpad is not linked: ${task.linear_issue_id}:${ref}`);
   return { issue: task.linear_issue_id, ref };
 }
 

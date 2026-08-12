@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
+import { Database } from "bun:sqlite";
 import { parseArgs } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as v from "valibot";
 import {
   disableRepository,
@@ -13,6 +15,7 @@ import { defaultDbPath, openDb } from "./db.ts";
 import { discoverCheckout } from "./git.ts";
 import {
   endSession,
+  findCurrentSession,
   parseHookPayload,
   registerSessionEvent,
   resolveCurrentContext,
@@ -21,9 +24,11 @@ import {
 import {
   addPullRequest,
   addWorkpadLink,
+  cancelTask,
   doneTask,
   findRunTerminal,
   removePullRequest,
+  removeWorkpadLink,
   show,
   startTask,
   syncPullRequests,
@@ -41,6 +46,7 @@ import {
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
+  RepositoryStatusSchema,
   ResourceNameSchema,
   RunStatusSchema,
   TaskStatusSchema,
@@ -56,12 +62,15 @@ Usage:
   wr config list
   wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
   wr task done [ISSUE] [--session ID]
+  wr task cancel [ISSUE] [--session ID]
   wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
   wr pr remove NUMBER [--task ISSUE] [--session ID]
   wr link workpad PATH [--task ISSUE] [--session ID]
+  wr link remove workpad PATH [--task ISSUE] [--session ID]
   wr show [--task ISSUE | --worktree PATH] [--session ID]
   wr sync [--session ID]
-  wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals [FILTERS]
+  wr doctor
+  wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals|repos [FILTERS]
   wr runs focus SESSION_ID|RUN_ID
   wr terminals focus TERMINAL_ID
 
@@ -79,6 +88,7 @@ Resource filters:
   --pr NUMBER           Pull request containing related records
   --status STATUS       Status supported by the selected resource
   --kind KIND           Link kind (links only)
+  --limit NUMBER        Maximum number of records
   --global              Do not infer repository scope from cwd
   --json FIELDS         Output selected comma-separated fields; omit value to list fields
   --jq, -q EXPR         Filter JSON output with jq`;
@@ -140,10 +150,12 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
     if (resource === "tasks") return v.parse(TaskStatusSchema, value);
     if (resource === "executions") return v.parse(ExecutionStatusSchema, value);
     if (resource === "runs" || resource === "terminals") return v.parse(RunStatusSchema, value);
+    if (resource === "repos") return v.parse(RepositoryStatusSchema, value);
   } catch {
     if (resource === "tasks") throw new Error("--status must be open, active, done, or cancelled");
     if (resource === "executions")
       throw new Error("--status must be active, finished, or abandoned");
+    if (resource === "repos") throw new Error("--status must be active or inactive");
     throw new Error("--status must be active or ended");
   }
   throw new Error(`--status is not supported by ${resource}`);
@@ -186,6 +198,7 @@ function runResource(resource: ResourceName, args: string[]): void {
       global: { type: "boolean" },
       json: { type: "string" },
       jq: { type: "string", short: "q" },
+      limit: { type: "string" },
     },
     strict: true,
   });
@@ -211,6 +224,7 @@ function runResource(resource: ResourceName, args: string[]): void {
     pullRequest: values.pr === undefined ? undefined : requireInteger(values.pr, "PR number"),
     status: resourceStatus(resource, values.status),
     kind: optionalString(values.kind, "--kind"),
+    limit: values.limit === undefined ? undefined : requireInteger(values.limit, "--limit"),
   };
   const db = openDb(process.env.WR_DB_PATH);
   try {
@@ -219,10 +233,78 @@ function runResource(resource: ResourceName, args: string[]): void {
       const live = getLiveTerminalIds();
       rows = rows.map((row) => ({ ...row, pane: paneStatus(row.itermSessionId, live) }));
     }
+    if (resource === "repos") {
+      const enabled = new Set(readConfig().repositories);
+      rows = rows.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
+    }
     console.log(renderResource(resource, rows, values.json, values.jq));
   } finally {
     db.close();
   }
+}
+
+function runDoctor(): void {
+  const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
+  const checkout = discoverCheckout(process.cwd());
+  const lines: string[] = [];
+  if (!existsSync(dbPath)) {
+    lines.push(`database path=${dbPath} status=missing`);
+    lines.push("session status=not-checked");
+  } else {
+    const db = new Database(dbPath, { readonly: true, strict: true });
+    try {
+      const version = db.query("PRAGMA user_version").get() as { user_version: number };
+      const quickRows = db.query("PRAGMA quick_check").all() as Array<Record<string, unknown>>;
+      const quick = quickRows.every((row) => Object.values(row)[0] === "ok") ? "ok" : "failed";
+      const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all().length;
+      lines.push(
+        `database path=${dbPath} status=ok schema=${version.user_version} quick_check=${quick} foreign_key_violations=${foreignKeyViolations}`,
+      );
+      const identity = findCurrentSession(db);
+      if (!identity) {
+        lines.push("session status=not-detected");
+      } else {
+        const row = db
+          .query(
+            `SELECT cs.id, COUNT(sr.id) AS activeRuns
+               FROM cli_sessions cs
+               LEFT JOIN session_runs sr ON sr.cli_session_id = cs.id AND sr.ended_at IS NULL
+              WHERE cs.cli = $cli AND cs.external_session_id = $externalSessionId
+              GROUP BY cs.id`,
+          )
+          .get(identity) as { id: string; activeRuns: number } | null;
+        lines.push(
+          `session identity=${identity.cli}:${identity.externalSessionId} registered=${row ? "yes" : "no"} active_runs=${row?.activeRuns ?? 0}`,
+        );
+      }
+    } finally {
+      db.close();
+    }
+  }
+  lines.push(
+    checkout
+      ? `repository path=${checkout.repoRoot} enabled=${isRepositoryEnabled(process.cwd()) ? "yes" : "no"}`
+      : "repository status=not-detected",
+  );
+  lines.push(
+    `commands gh=${Bun.which("gh") ? "available" : "missing"} jq=${Bun.which("jq") ? "available" : "missing"} it2=${Bun.which("it2") ? "available" : "missing"}`,
+  );
+  const home = process.env.HOME;
+  if (home) {
+    const claudePath = join(
+      process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"),
+      "settings.json",
+    );
+    const codexPath = join(process.env.CODEX_HOME ?? join(home, ".codex"), "hooks.json");
+    const claude = existsSync(claudePath) ? readFileSync(claudePath, "utf8") : "";
+    const codex = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : "";
+    lines.push(
+      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"}`,
+    );
+  } else {
+    lines.push("hooks claude=unknown codex=unknown");
+  }
+  console.log(lines.join("\n"));
 }
 
 function runConfig(args: string[]): void {
@@ -292,6 +374,12 @@ async function main(): Promise<void> {
 
   if (command === "config") {
     runConfig(args);
+    return;
+  }
+
+  if (command === "doctor") {
+    if (args.length !== 0) throw new Error("doctor does not accept arguments");
+    runDoctor();
     return;
   }
 
@@ -405,7 +493,7 @@ async function main(): Promise<void> {
         console.log(`started ${issue} execution=${result.executionId}`);
         return;
       }
-      if (action === "done") {
+      if (action === "done" || action === "cancel") {
         const { values, positionals } = parseArgs({
           args,
           options: { session: { type: "string" } },
@@ -413,8 +501,14 @@ async function main(): Promise<void> {
           strict: true,
         });
         if (positionals.length > 1) throw new Error("Only one task ID may be provided");
-        const current = resolveCurrentContext(db, process.cwd(), values.session);
         const [issue] = positionals;
+        if (action === "cancel") {
+          const current = issue ? null : resolveCurrentContext(db, process.cwd(), values.session);
+          const result = cancelTask(db, current, issue);
+          console.log(`cancelled ${result.issue} abandoned=${result.abandoned}`);
+          return;
+        }
+        const current = resolveCurrentContext(db, process.cwd(), values.session);
         const result = doneTask(db, current, issue);
         console.log(
           `done ${result.issue} finished=${result.finished} abandoned=${result.abandoned}`,
@@ -460,7 +554,9 @@ async function main(): Promise<void> {
     }
 
     if (command === "link") {
-      const kind = args.shift();
+      const actionOrKind = args.shift();
+      const remove = actionOrKind === "remove";
+      const kind = remove ? args.shift() : actionOrKind;
       if (kind !== "workpad") throw new Error(`Unknown link kind: ${kind ?? ""}`);
       const { values, positionals } = parseArgs({
         args,
@@ -472,9 +568,15 @@ async function main(): Promise<void> {
         strict: true,
       });
       if (positionals.length !== 1) throw new Error("A workpad path is required");
-      const current = resolveCurrentContext(db, process.cwd(), values.session);
       const path = positionals[0]!;
       const { task } = values;
+      if (remove) {
+        const current = task ? null : resolveCurrentContext(db, process.cwd(), values.session);
+        const result = removeWorkpadLink(db, current, path, task);
+        console.log(`removed ${result.issue} workpad=${result.ref}`);
+        return;
+      }
+      const current = resolveCurrentContext(db, process.cwd(), values.session);
       const result = addWorkpadLink(db, current, path, task);
       console.log(`linked ${result.issue} workpad=${result.ref}`);
       return;

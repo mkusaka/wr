@@ -31,6 +31,39 @@ function parseSessionIdentity(value: string): SessionIdentity {
   }
 }
 
+export function findCurrentSession(
+  db: Database,
+  env: NodeJS.ProcessEnv = process.env,
+): SessionIdentity | null {
+  if (env.WR_CLI_SESSION) return parseSessionIdentity(env.WR_CLI_SESSION);
+  if (env.CODEX_THREAD_ID) {
+    return v.parse(SessionIdentitySchema, {
+      cli: "codex",
+      externalSessionId: env.CODEX_THREAD_ID,
+    });
+  }
+  if (env.CLAUDE_CODE_SESSION_ID) {
+    return v.parse(SessionIdentitySchema, {
+      cli: "claude",
+      externalSessionId: env.CLAUDE_CODE_SESSION_ID,
+    });
+  }
+  if (!env.TERM_SESSION_ID) return null;
+  const row = db
+    .query(
+      `SELECT cs.cli, cs.external_session_id
+         FROM session_runs sr
+         JOIN cli_sessions cs ON cs.id = sr.cli_session_id
+        WHERE sr.iterm_session_id = $terminalId AND sr.ended_at IS NULL
+        ORDER BY sr.last_seen_at DESC LIMIT 1`,
+    )
+    .get({ terminalId: env.TERM_SESSION_ID }) as {
+    cli: Cli;
+    external_session_id: string;
+  } | null;
+  return row ? { cli: row.cli, externalSessionId: row.external_session_id } : null;
+}
+
 function ensureCliSession(db: Database, identity: SessionIdentity): string {
   const existing = db
     .query(
@@ -175,34 +208,9 @@ export function resolveCurrentContext(
   explicitSession?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CurrentContext {
-  let automatic: SessionIdentity | null = null;
+  const automatic = findCurrentSession(db, env);
   let requestedRunId: string | null = null;
-
-  if (env.WR_CLI_SESSION) {
-    automatic = parseSessionIdentity(env.WR_CLI_SESSION);
-    requestedRunId = env.WR_SESSION_RUN_ID || null;
-  } else if (env.CODEX_THREAD_ID) {
-    automatic = v.parse(SessionIdentitySchema, {
-      cli: "codex",
-      externalSessionId: env.CODEX_THREAD_ID,
-    });
-  } else if (env.CLAUDE_CODE_SESSION_ID) {
-    automatic = v.parse(SessionIdentitySchema, {
-      cli: "claude",
-      externalSessionId: env.CLAUDE_CODE_SESSION_ID,
-    });
-  } else if (env.TERM_SESSION_ID) {
-    const row = db
-      .query(
-        `SELECT cs.cli, cs.external_session_id
-           FROM session_runs sr
-           JOIN cli_sessions cs ON cs.id = sr.cli_session_id
-          WHERE sr.iterm_session_id = $terminalId AND sr.ended_at IS NULL
-          ORDER BY sr.last_seen_at DESC LIMIT 1`,
-      )
-      .get({ terminalId: env.TERM_SESSION_ID }) as { cli: Cli; external_session_id: string } | null;
-    if (row) automatic = { cli: row.cli, externalSessionId: row.external_session_id };
-  }
+  if (env.WR_CLI_SESSION) requestedRunId = env.WR_SESSION_RUN_ID || null;
 
   if (automatic && explicitSession && automatic.externalSessionId !== explicitSession) {
     throw new Error("The discovered session conflicts with --session");
