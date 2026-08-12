@@ -26,7 +26,8 @@ jobs:
       - run: bun run format:check
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun test
+      - run: bun run knip
+      - run: bun run test
 
   release:
     name: Create Release

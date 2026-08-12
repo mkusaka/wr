@@ -30,7 +30,7 @@ export type ResourceFilters = {
 };
 
 export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
-  tasks: ["id", "linearIssueId", "parentTaskId", "title", "status", "createdAt", "updatedAt"],
+  tasks: ["id", "linearIssueId", "title", "status", "createdAt", "updatedAt"],
   sessions: ["id", "session", "cli", "externalSessionId", "parentSessionId", "createdAt"],
   runs: [
     "id",
@@ -55,13 +55,12 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
     "session",
     "runId",
     "checkoutId",
-    "role",
     "status",
     "startedAt",
     "finishedAt",
     "worktreePath",
   ],
-  links: ["id", "taskId", "linearIssueId", "kind", "ref", "metadata", "createdAt"],
+  links: ["id", "taskId", "linearIssueId", "kind", "ref", "createdAt"],
   prs: [
     "id",
     "repo",
@@ -119,7 +118,7 @@ export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
 
 const RELATIONSHIPS = `WITH relationships AS (
   SELECT
-    t.id AS taskId, t.linear_issue_id AS linearIssueId, t.parent_task_id AS parentTaskId,
+    t.id AS taskId, t.linear_issue_id AS linearIssueId,
     t.title AS taskTitle, t.status AS taskStatus, t.created_at AS taskCreatedAt,
     t.updated_at AS taskUpdatedAt,
     cs.id AS sessionId, cs.cli AS cli, cs.external_session_id AS externalSessionId,
@@ -129,7 +128,7 @@ const RELATIONSHIPS = `WITH relationships AS (
     sr.source AS runSource, sr.started_at AS runStartedAt, sr.last_seen_at AS lastSeenAt,
     sr.ended_at AS endedAt, sr.end_reason AS endReason,
     CASE WHEN sr.ended_at IS NULL THEN 'active' ELSE 'ended' END AS runStatus,
-    e.id AS executionId, e.checkout_id AS executionCheckoutId, e.role AS executionRole,
+    e.id AS executionId, e.checkout_id AS executionCheckoutId,
     e.status AS executionStatus, e.started_at AS executionStartedAt,
     e.finished_at AS executionFinishedAt,
     gc.id AS checkoutId, gc.repo_root AS repoRoot, gc.worktree_path AS worktreePath,
@@ -137,8 +136,7 @@ const RELATIONSHIPS = `WITH relationships AS (
     pr.id AS prId, pr.repo AS prRepo, pr.number AS prNumber, pr.url AS prUrl,
     pr.head_branch AS headBranch, pr.base_branch AS baseBranch,
     pr.parent_pr_id AS parentPrId, parent.number AS parentNumber, pr.created_at AS prCreatedAt,
-    tl.id AS linkId, tl.kind AS linkKind, tl.ref AS linkRef,
-    tl.metadata_json AS linkMetadata, tl.created_at AS linkCreatedAt
+    tl.id AS linkId, tl.kind AS linkKind, tl.ref AS linkRef, tl.created_at AS linkCreatedAt
   FROM cli_sessions cs
   LEFT JOIN session_runs sr ON sr.cli_session_id = cs.id
   LEFT JOIN executions e ON e.session_run_id = sr.id
@@ -148,6 +146,22 @@ const RELATIONSHIPS = `WITH relationships AS (
   LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
   LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
   LEFT JOIN task_links tl ON tl.task_id = t.id
+  UNION ALL
+  SELECT
+    NULL, NULL, NULL, NULL, NULL, NULL,
+    cs.id, cs.cli, cs.external_session_id, cs.parent_session_id, cs.created_at,
+    cs.cli || ':' || cs.external_session_id,
+    sr.id, sr.iterm_session_id, sr.started_cwd, sr.source, sr.started_at, sr.last_seen_at,
+    sr.ended_at, sr.end_reason,
+    CASE WHEN sr.ended_at IS NULL THEN 'active' ELSE 'ended' END,
+    NULL, NULL, NULL, NULL, NULL,
+    gc.id, gc.repo_root, gc.worktree_path, gc.branch, gc.created_at,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL
+  FROM cli_sessions cs
+  JOIN session_runs sr ON sr.cli_session_id = cs.id
+  JOIN session_run_checkouts src ON src.session_run_id = sr.id
+  JOIN git_checkouts gc ON gc.id = src.checkout_id
 )`;
 
 const FILTERS = `($task IS NULL OR linearIssueId = $task)
@@ -165,7 +179,7 @@ const FILTERS = `($task IS NULL OR linearIssueId = $task)
 function baseQuery(resource: ResourceName): string {
   switch (resource) {
     case "tasks":
-      return `SELECT id, linear_issue_id AS linearIssueId, parent_task_id AS parentTaskId,
+      return `SELECT id, linear_issue_id AS linearIssueId,
                      title, status, created_at AS createdAt, updated_at AS updatedAt
                 FROM tasks ORDER BY updated_at DESC, linear_issue_id`;
     case "sessions":
@@ -191,7 +205,7 @@ function baseQuery(resource: ResourceName): string {
                      e.cli_session_id AS sessionId,
                      cs.cli || ':' || cs.external_session_id AS session,
                      e.session_run_id AS runId, e.checkout_id AS checkoutId,
-                     e.role, e.status, e.started_at AS startedAt, e.finished_at AS finishedAt,
+                     e.status, e.started_at AS startedAt, e.finished_at AS finishedAt,
                      gc.worktree_path AS worktreePath
                 FROM executions e JOIN tasks t ON t.id = e.task_id
                 JOIN cli_sessions cs ON cs.id = e.cli_session_id
@@ -199,7 +213,7 @@ function baseQuery(resource: ResourceName): string {
                ORDER BY e.started_at DESC`;
     case "links":
       return `SELECT tl.id, tl.task_id AS taskId, t.linear_issue_id AS linearIssueId,
-                     tl.kind, tl.ref, tl.metadata_json AS metadata, tl.created_at AS createdAt
+                     tl.kind, tl.ref, tl.created_at AS createdAt
                 FROM task_links tl JOIN tasks t ON t.id = tl.task_id
                ORDER BY tl.created_at DESC`;
     case "prs":
@@ -231,7 +245,7 @@ function baseQuery(resource: ResourceName): string {
 function relatedSelect(resource: ResourceName): string {
   switch (resource) {
     case "tasks":
-      return `taskId AS id, linearIssueId, parentTaskId, taskTitle AS title,
+      return `taskId AS id, linearIssueId, taskTitle AS title,
               taskStatus AS status, taskCreatedAt AS createdAt, taskUpdatedAt AS updatedAt`;
     case "sessions":
       return `sessionId AS id, cli, externalSessionId, parentSessionId,
@@ -244,12 +258,12 @@ function relatedSelect(resource: ResourceName): string {
       return `checkoutId AS id, repoRoot, worktreePath, branch, checkoutCreatedAt AS createdAt`;
     case "executions":
       return `executionId AS id, taskId, linearIssueId, sessionId, session, runId,
-              executionCheckoutId AS checkoutId, executionRole AS role,
+              executionCheckoutId AS checkoutId,
               executionStatus AS status, executionStartedAt AS startedAt,
               executionFinishedAt AS finishedAt, worktreePath`;
     case "links":
       return `linkId AS id, taskId, linearIssueId, linkKind AS kind, linkRef AS ref,
-              linkMetadata AS metadata, linkCreatedAt AS createdAt`;
+              linkCreatedAt AS createdAt`;
     case "prs":
       return `prId AS id, prRepo AS repo, prNumber AS number, prUrl AS url,
               headBranch, baseBranch, parentPrId, parentNumber, prCreatedAt AS createdAt,
@@ -272,18 +286,20 @@ function queryRepositories(db: Database, filters: ResourceFilters): Array<Record
               COUNT(DISTINCT gc.worktree_path) AS worktreeCount,
               COUNT(DISTINCT e.task_id) AS taskCount,
               COUNT(DISTINCT CASE WHEN e.status = 'active' THEN e.id END) AS activeExecutions,
-              MAX(COALESCE(t.updated_at, e.finished_at, e.started_at, gc.created_at)) AS updatedAt
+              MAX(src.last_seen_at) AS updatedAt
          FROM git_checkouts gc
          LEFT JOIN executions e ON e.checkout_id = gc.id
          LEFT JOIN tasks t ON t.id = e.task_id
          LEFT JOIN cli_sessions cs ON cs.id = e.cli_session_id
-         LEFT JOIN session_runs sr ON sr.id = e.session_run_id
+         LEFT JOIN session_run_checkouts src ON src.checkout_id = gc.id
+         LEFT JOIN session_runs sr ON sr.id = src.session_run_id
+         LEFT JOIN cli_sessions run_cs ON run_cs.id = sr.cli_session_id
          LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
          LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
          LEFT JOIN task_links tl ON tl.task_id = t.id
         WHERE ($task IS NULL OR t.linear_issue_id = $task)
-          AND ($session IS NULL OR cs.external_session_id = $session)
-          AND ($run IS NULL OR sr.id = $run)
+          AND ($session IS NULL OR cs.external_session_id = $session OR run_cs.external_session_id = $session)
+          AND ($run IS NULL OR e.session_run_id = $run OR sr.id = $run)
           AND ($checkout IS NULL OR gc.id = $checkout)
           AND ($execution IS NULL OR e.id = $execution)
           AND ($link IS NULL OR tl.id = $link)

@@ -152,7 +152,7 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
     if (resource === "runs" || resource === "terminals") return v.parse(RunStatusSchema, value);
     if (resource === "repos") return v.parse(RepositoryStatusSchema, value);
   } catch {
-    if (resource === "tasks") throw new Error("--status must be open, active, done, or cancelled");
+    if (resource === "tasks") throw new Error("--status must be active, done, or cancelled");
     if (resource === "executions")
       throw new Error("--status must be active, finished, or abandoned");
     if (resource === "repos") throw new Error("--status must be active or inactive");
@@ -228,6 +228,9 @@ function runResource(resource: ResourceName, args: string[]): void {
   };
   const db = openDb(process.env.WR_DB_PATH);
   try {
+    if (isRepositoryEnabled(process.cwd()) && findCurrentSession(db)) {
+      resolveCurrentContext(db, process.cwd());
+    }
     let rows = queryResource(db, resource, filters);
     if (resource === "runs" || resource === "terminals") {
       const live = getLiveTerminalIds();

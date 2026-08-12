@@ -102,6 +102,20 @@ export function ensureCheckout(db: Database, checkout: Checkout | null): string 
   return id;
 }
 
+export function touchRunCheckout(
+  db: Database,
+  sessionRunId: string,
+  checkoutId: string | null,
+): void {
+  if (!checkoutId) return;
+  db.query(
+    `INSERT INTO session_run_checkouts (session_run_id, checkout_id)
+     VALUES ($sessionRunId, $checkoutId)
+     ON CONFLICT(session_run_id, checkout_id) DO UPDATE SET
+       last_seen_at = CURRENT_TIMESTAMP`,
+  ).run({ sessionRunId, checkoutId });
+}
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -144,7 +158,12 @@ export function registerSessionEvent(
       )
       .get({ sessionId: session.id, terminalId }) as { id: string } | null;
     if (run) {
-      db.query("UPDATE session_runs SET last_seen_at = CURRENT_TIMESTAMP WHERE id = $id").run(run);
+      db.transaction(() => {
+        db.query("UPDATE session_runs SET last_seen_at = CURRENT_TIMESTAMP WHERE id = $id").run(
+          run,
+        );
+        touchRunCheckout(db, run.id, ensureCheckout(db, discoverCheckout(cwd)));
+      }).immediate();
       if (cli === "claude") appendClaudeEnvironment(env.CLAUDE_ENV_FILE, identity, run.id);
     }
     return { cliSessionId: session.id, sessionRunId: run?.id ?? null };
@@ -162,13 +181,14 @@ export function registerSessionEvent(
           WHERE iterm_session_id = $terminalId AND ended_at IS NULL`,
       ).run({ terminalId });
     }
-    ensureCheckout(db, checkout);
+    const checkoutId = ensureCheckout(db, checkout);
     sessionRunId = newId();
     db.query(
       `INSERT INTO session_runs
         (id, cli_session_id, iterm_session_id, started_cwd, source)
        VALUES ($id, $cliSessionId, $terminalId, $cwd, $source)`,
     ).run({ id: sessionRunId, cliSessionId, terminalId, cwd, source });
+    touchRunCheckout(db, sessionRunId, checkoutId);
   }).immediate();
 
   if (cli === "claude") appendClaudeEnvironment(env.CLAUDE_ENV_FILE, identity, sessionRunId);
@@ -274,6 +294,7 @@ export function resolveCurrentContext(
       });
     }
     checkoutId = ensureCheckout(db, checkout);
+    touchRunCheckout(db, sessionRunId, checkoutId);
   }).immediate();
 
   return { ...identity, cliSessionId, sessionRunId, checkoutId, checkout };

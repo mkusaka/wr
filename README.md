@@ -17,8 +17,9 @@
 bun install
 bun run format:check
 bun run lint
-bun test
 bun run typecheck
+bun run knip
+bun run test
 bun src/cli.ts --help
 ```
 
@@ -60,7 +61,7 @@ Add the following command hooks to the Claude Code user settings and Codex user 
 | Claude Code | `$HOME/.local/bin/wr internal session-event --cli claude` | `$HOME/.local/bin/wr internal session-end --cli claude` |
 | Codex       | `$HOME/.local/bin/wr internal session-event --cli codex`  | `$HOME/.local/bin/wr internal session-end --cli codex`  |
 
-The hooks only register their stdin JSON in SQLite and never access the network. SessionStart events outside enabled repositories are ignored. SessionEnd still closes an existing registered run after the session moves outside its enabled repository. After adding the Codex hooks, open `/hooks`, review them, and mark them as trusted.
+The hooks only register their stdin JSON in SQLite and never access the network. SessionStart associates the new run with its starting Git checkout. SessionStart events outside enabled repositories are ignored. SessionEnd still closes an existing registered run after the session moves outside its enabled repository. After adding the Codex hooks, open `/hooks`, review them, and mark them as trusted.
 
 ## Commands
 
@@ -118,7 +119,9 @@ Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` t
 
 `wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and links it only when that checkout has exactly one active task. GitHub lookup failures and ambiguous tasks stop the command before any database writes.
 
-`wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Executions, so no GitHub or Linear network lookup is performed.
+`wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Run-to-Checkout and Execution relationships, so no GitHub or Linear network lookup is performed.
+
+Session runs and Git checkouts are related independently of tasks. SessionStart records the starting checkout, and later `wr` commands record the checkout where they run. `wr task start --worktree PATH` also records the selected checkout. An Execution is created only by `wr task start`; registering a run never creates one implicitly.
 
 When `it2` is available, `wr runs` marks each pane as `live` or `closed`. Use `wr runs focus CLI:ID` or `wr runs focus RUN_ID` to focus its active iTerm2 pane. Without `it2`, pane status is `unknown`.
 

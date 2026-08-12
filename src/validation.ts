@@ -32,7 +32,7 @@ export const PullRequestSchema = v.object({
 
 export const PullRequestListSchema = v.array(PullRequestSchema);
 
-export const TaskStatusSchema = v.picklist(["open", "active", "done", "cancelled"]);
+export const TaskStatusSchema = v.picklist(["active", "done", "cancelled"]);
 
 export const ExecutionStatusSchema = v.picklist(["active", "finished", "abandoned"]);
 

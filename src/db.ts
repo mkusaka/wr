@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import schema from "./schema.sql" with { type: "text" };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export function defaultDbPath(env: NodeJS.ProcessEnv = process.env): string {
   const dataHome = env.XDG_DATA_HOME || (env.HOME ? join(env.HOME, ".local", "share") : undefined);

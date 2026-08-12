@@ -28,8 +28,8 @@ function relatedRecords() {
      VALUES ('pr-1', 'owner/repo', 123, 'https://example.test/123', 'feature', 'main')`,
   ).run();
   db.query(
-    `INSERT INTO task_pull_requests (task_id, pull_request_id, relation)
-     VALUES ($taskId, 'pr-1', 'implements')`,
+    `INSERT INTO task_pull_requests (task_id, pull_request_id)
+     VALUES ($taskId, 'pr-1')`,
   ).run({ taskId: task.id });
   db.query("UPDATE git_checkouts SET branch = 'feature' WHERE id = $id").run({
     id: current.checkoutId,
@@ -91,6 +91,20 @@ describe("resource queries", () => {
     );
   });
 
+  test("finds a run and checkout by repository before an execution exists", () => {
+    db = testDb();
+    const current = testContext(db, "run-checkout-session");
+    const filter = { repoRoot: current.checkout!.repoRoot };
+    expect(queryResource(db, "runs", filter)[0]?.id).toBe(current.sessionRunId);
+    expect(queryResource(db, "sessions", filter)[0]?.externalSessionId).toBe(
+      "run-checkout-session",
+    );
+    expect(queryResource(db, "checkouts", { session: "run-checkout-session" })[0]?.id).toBe(
+      current.checkoutId,
+    );
+    expect(queryResource(db, "executions", filter)).toEqual([]);
+  });
+
   test("orders tasks by most recent update", () => {
     const { current } = relatedRecords();
     startTask(db!, current, "MAL-OLD", {});
@@ -130,10 +144,10 @@ describe("resource output", () => {
 
   test("groups human-readable tasks by status", () => {
     const output = renderResource("tasks", [
-      { linearIssueId: "MAL-1", status: "open", title: "Open", updatedAt: "2026-01-01" },
+      { linearIssueId: "MAL-1", status: "done", title: "Done", updatedAt: "2026-01-01" },
       { linearIssueId: "MAL-2", status: "active", title: "Active", updatedAt: "2026-01-02" },
     ]);
-    expect(output.indexOf("active:")).toBeLessThan(output.indexOf("open:"));
+    expect(output.indexOf("active:")).toBeLessThan(output.indexOf("done:"));
     expect(output).toContain("MAL-2 Active updated=2026-01-02");
   });
 

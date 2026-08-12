@@ -8,9 +8,6 @@ import {
   cancelTask,
   doneTask,
   findRunTerminal,
-  listPullRequests,
-  listRuns,
-  listTasks,
   removePullRequest,
   removeWorkpadLink,
   show,
@@ -96,48 +93,13 @@ describe("task lifecycle", () => {
     expect(cancelTask(db, null, "TASK-CANCEL").abandoned).toBe(0);
   });
 
-  test("an old active run is displayed as stale without being closed", () => {
-    db = testDb();
-    const current = testContext(db, "stale-session");
-    db.query(
-      "UPDATE session_runs SET last_seen_at = datetime('now', '-25 hours') WHERE id = $id",
-    ).run({
-      id: current.sessionRunId,
-    });
-    expect(listRuns(db, {})).toContain("[stale]");
-    expect(
-      (
-        db
-          .query("SELECT ended_at FROM session_runs WHERE id = $id")
-          .get({ id: current.sessionRunId }) as { ended_at: null }
-      ).ended_at,
-    ).toBeNull();
-  });
-
-  test("lists tasks by status and most recent update", () => {
-    db = testDb();
-    const current = testContext(db);
-    startTask(db, current, "TASK-OLD", { title: "Old" });
-    startTask(db, current, "TASK-NEW", { title: "New" });
-    db.query(
-      "UPDATE tasks SET updated_at = '2026-01-01 00:00:00' WHERE linear_issue_id = 'TASK-OLD'",
-    ).run();
-    db.query(
-      "UPDATE tasks SET updated_at = '2026-01-02 00:00:00' WHERE linear_issue_id = 'TASK-NEW'",
-    ).run();
-    const output = listTasks(db, { repoRoot: current.checkout!.repoRoot });
-    expect(output.indexOf("TASK-NEW")).toBeLessThan(output.indexOf("TASK-OLD"));
-    expect(listTasks(db, { status: "done" })).toBe("No tasks");
-  });
-
-  test("shows terminal liveness and resolves a focus target", () => {
+  test("resolves a terminal focus target", () => {
     db = testDb();
     const current = testContext(db, "focus-session");
     db.query("UPDATE session_runs SET iterm_session_id = $terminal WHERE id = $id").run({
       id: current.sessionRunId,
       terminal: "w1t2p3:terminal-123",
     });
-    expect(listRuns(db, {}, new Set(["terminal-123"]))).toContain("pane=live");
     expect(findRunTerminal(db, "focus-session")).toBe("terminal-123");
   });
 
@@ -259,7 +221,7 @@ fi
     }
   });
 
-  test("removes only the task relationship and lists remaining pull requests", () => {
+  test("removes only the task relationship", () => {
     db = testDb();
     const current = testContext(db);
     startTask(db, current, "TASK-PR", {});
@@ -274,21 +236,10 @@ fi
     db.query(
       "INSERT INTO task_pull_requests (task_id, pull_request_id) VALUES ($taskId, 'pr-1')",
     ).run({ taskId: task.id });
-    expect(listPullRequests(db, current.checkout!.repoRoot)).toContain("owner/repo#42");
-    expect(listRuns(db, { repoRoot: current.checkout!.repoRoot, pullRequest: 42 })).toContain(
-      "tasks=TASK-PR",
-    );
-    expect(
-      listRuns(db, { repoRoot: current.checkout!.repoRoot, branch: current.checkout!.branch! }),
-    ).toContain(`run=${current.sessionRunId}`);
-    expect(listRuns(db, { worktreePath: current.checkout!.worktreePath })).toContain(
-      `run=${current.sessionRunId}`,
-    );
     expect(removePullRequest(db, null, 42, "TASK-PR")).toMatchObject({ removed: true });
     expect(
       (db.query("SELECT COUNT(*) AS count FROM pull_requests").get() as { count: number }).count,
     ).toBe(1);
-    expect(listPullRequests(db)).toBe("No pull requests");
   });
 
   test("syncs pull requests for all active checkouts in the current session", () => {
@@ -299,6 +250,15 @@ fi
     expect(Bun.spawnSync(["git", "init", "-b", "feature"], { cwd: secondRepo }).exitCode).toBe(0);
     writeFileSync(join(secondRepo, ".sync-second"), "");
     startTask(db, current, "TASK-SYNC-SECOND", { worktree: secondRepo });
+    expect(
+      (
+        db
+          .query(
+            "SELECT COUNT(*) AS count FROM session_run_checkouts WHERE session_run_id = $runId",
+          )
+          .get({ runId: current.sessionRunId }) as { count: number }
+      ).count,
+    ).toBe(2);
     const bin = tempDir("wr-fake-gh-sync");
     const gh = join(bin, "gh");
     writeFileSync(
@@ -339,8 +299,6 @@ fi
         pullRequests: 2,
         linked: 2,
       });
-      expect(listPullRequests(db)).toContain("owner/repo#77");
-      expect(listPullRequests(db)).toContain("owner/repo#78");
       expect(syncPullRequests(db, current)).toMatchObject({ pullRequests: 2, linked: 0 });
     } finally {
       delete process.env.WR_FAKE_GH_FAIL_SECOND;

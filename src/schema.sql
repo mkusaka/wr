@@ -1,10 +1,9 @@
 CREATE TABLE tasks (
   id               TEXT PRIMARY KEY,
   linear_issue_id  TEXT UNIQUE,
-  parent_task_id   TEXT REFERENCES tasks(id),
   title            TEXT,
-  status           TEXT NOT NULL DEFAULT 'open'
-                   CHECK (status IN ('open','active','done','cancelled')),
+  status           TEXT NOT NULL DEFAULT 'active'
+                   CHECK (status IN ('active','done','cancelled')),
   created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -39,13 +38,19 @@ CREATE TABLE git_checkouts (
   UNIQUE(repo_root, worktree_path)
 );
 
+CREATE TABLE session_run_checkouts (
+  session_run_id  TEXT NOT NULL REFERENCES session_runs(id),
+  checkout_id     TEXT NOT NULL REFERENCES git_checkouts(id),
+  last_seen_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_run_id, checkout_id)
+);
+
 CREATE TABLE executions (
   id              TEXT PRIMARY KEY,
   task_id         TEXT NOT NULL REFERENCES tasks(id),
   cli_session_id  TEXT NOT NULL REFERENCES cli_sessions(id),
   session_run_id  TEXT REFERENCES session_runs(id),
   checkout_id     TEXT REFERENCES git_checkouts(id),
-  role            TEXT NOT NULL DEFAULT 'implementer',
   status          TEXT NOT NULL DEFAULT 'active'
                   CHECK (status IN ('active','finished','abandoned')),
   started_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -67,8 +72,7 @@ CREATE TABLE pull_requests (
 CREATE TABLE task_pull_requests (
   task_id          TEXT NOT NULL REFERENCES tasks(id),
   pull_request_id  TEXT NOT NULL REFERENCES pull_requests(id),
-  relation         TEXT NOT NULL DEFAULT 'implements',
-  PRIMARY KEY (task_id, pull_request_id, relation)
+  PRIMARY KEY (task_id, pull_request_id)
 );
 
 CREATE TABLE task_links (
@@ -76,7 +80,6 @@ CREATE TABLE task_links (
   task_id        TEXT NOT NULL REFERENCES tasks(id),
   kind           TEXT NOT NULL,
   ref            TEXT NOT NULL,
-  metadata_json  TEXT,
   created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(task_id, kind, ref)
 );
@@ -93,3 +96,6 @@ CREATE INDEX idx_exec_active_checkout
 
 CREATE INDEX idx_checkouts_repo
   ON git_checkouts(repo_root);
+
+CREATE INDEX idx_run_checkouts_checkout
+  ON session_run_checkouts(checkout_id, last_seen_at);

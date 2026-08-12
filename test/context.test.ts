@@ -46,6 +46,10 @@ describe("session context", () => {
       ).count,
     ).toBe(1);
     expect(second.sessionRunId).not.toBe(first.sessionRunId);
+    expect(
+      (db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get() as { count: number })
+        .count,
+    ).toBe(2);
   });
 
   test("repeated compact events update the same run and environment file", () => {
@@ -78,6 +82,10 @@ describe("session context", () => {
     expect(Bun.file(envFile).text()).resolves.toContain(
       `WR_SESSION_RUN_ID='${start.sessionRunId}'`,
     );
+    expect(
+      (db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get() as { count: number })
+        .count,
+    ).toBe(1);
   });
 
   test("session end without TERM_SESSION_ID closes the latest session run", () => {
@@ -106,6 +114,11 @@ describe("session context", () => {
     });
     expect(current.externalSessionId).toBe("self-register");
     expect(current.sessionRunId).toBeTruthy();
+    expect(
+      db
+        .query("SELECT checkout_id FROM session_run_checkouts WHERE session_run_id = $runId")
+        .get({ runId: current.sessionRunId }),
+    ).toEqual({ checkout_id: current.checkoutId });
     expect(() =>
       resolveCurrentContext(db!, process.cwd(), "other", {
         CODEX_THREAD_ID: "self-register",

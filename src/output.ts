@@ -22,7 +22,7 @@ export function renderResource(
     if (jqExpression !== undefined) throw new Error("--jq requires --json");
     if (rows.length === 0) return `No ${resource}`;
     if (resource === "tasks") {
-      return ["active", "open", "done", "cancelled"]
+      return ["active", "done", "cancelled"]
         .map((status) => {
           const tasks = rows.filter((row) => row.status === status);
           if (tasks.length === 0) return null;
@@ -51,8 +51,9 @@ export function renderResource(
     .map((field) => field.trim())
     .filter(Boolean);
   if (fields.length === 0) throw new Error("--json requires at least one field");
-  const json = JSON.stringify(projectRows(resource, rows, fields));
-  if (jqExpression === undefined) return JSON.stringify(JSON.parse(json), null, 2);
+  const projected = projectRows(resource, rows, fields);
+  if (jqExpression === undefined) return JSON.stringify(projected, null, 2);
+  const json = JSON.stringify(projected);
   const result = (() => {
     try {
       return Bun.spawnSync(["jq", "-r", jqExpression], {

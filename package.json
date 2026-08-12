@@ -10,8 +10,9 @@
     "compile": "bun build --compile --minify --sourcemap src/cli.ts --outfile dist/wr",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
+    "knip": "knip",
     "lint": "oxlint . --deny-warnings",
-    "test": "bun test",
+    "test": "bun test ./test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,9 +20,19 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "knip": "6.29.0",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
     "typescript": "latest"
   },
-  "packageManager": "bun@1.3.14"
+  "packageManager": "bun@1.3.14",
+  "knip": {
+    "entry": [
+      "test/*.test.ts"
+    ],
+    "project": [
+      "src/**/*.ts",
+      "test/**/*.ts"
+    ]
+  }
 }

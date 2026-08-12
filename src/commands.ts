@@ -3,7 +3,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import * as v from "valibot";
 import type { CurrentContext } from "./context.ts";
-import { ensureCheckout } from "./context.ts";
+import { ensureCheckout, touchRunCheckout } from "./context.ts";
 import { discoverCheckout } from "./git.ts";
 import { newId } from "./db.ts";
 import {
@@ -18,7 +18,6 @@ type TaskRow = {
   linear_issue_id: string;
   title: string | null;
   status: string;
-  updated_at?: string;
 };
 
 function findTask(db: Database, issue: string): TaskRow {
@@ -57,6 +56,7 @@ export function startTask(
 
   db.transaction(() => {
     checkoutId = ensureCheckout(db, checkout);
+    touchRunCheckout(db, current.sessionRunId, checkoutId);
     const existing = db
       .query("SELECT id, status FROM tasks WHERE linear_issue_id = $issue")
       .get({ issue }) as { id: string; status: string } | null;
@@ -242,8 +242,7 @@ export function removePullRequest(
       `SELECT pr.id, pr.repo
          FROM task_pull_requests tpr
          JOIN pull_requests pr ON pr.id = tpr.pull_request_id
-        WHERE tpr.task_id = $taskId AND pr.number = $number
-          AND tpr.relation = 'implements'`,
+        WHERE tpr.task_id = $taskId AND pr.number = $number`,
     )
     .all({ taskId: task.id, number }) as Array<{ id: string; repo: string }>;
   if (rows.length === 0)
@@ -255,8 +254,7 @@ export function removePullRequest(
     db
       .query(
         `DELETE FROM task_pull_requests
-          WHERE task_id = $taskId AND pull_request_id = $pullRequestId
-            AND relation = 'implements'`,
+          WHERE task_id = $taskId AND pull_request_id = $pullRequestId`,
       )
       .run({ taskId: task.id, pullRequestId: row.id }).changes === 1;
   return { issue: task.linear_issue_id, repo: row.repo, removed };
@@ -371,8 +369,8 @@ export function syncPullRequests(
       const pullRequestId = ids.get(`${item.repo}#${item.pr.number}`)!;
       linked += db
         .query(
-          `INSERT INTO task_pull_requests (task_id, pull_request_id, relation)
-           VALUES ($taskId, $pullRequestId, 'implements')
+          `INSERT INTO task_pull_requests (task_id, pull_request_id)
+           VALUES ($taskId, $pullRequestId)
            ON CONFLICT DO NOTHING`,
         )
         .run({ taskId: item.taskId, pullRequestId }).changes;
@@ -414,8 +412,8 @@ export function addPullRequest(
     const parentId = parent ? upsertPullRequest(db, repo, parent, null) : null;
     const childId = upsertPullRequest(db, repo, child, parentId);
     db.query(
-      `INSERT INTO task_pull_requests (task_id, pull_request_id, relation)
-       VALUES ($taskId, $pullRequestId, 'implements')
+      `INSERT INTO task_pull_requests (task_id, pull_request_id)
+       VALUES ($taskId, $pullRequestId)
        ON CONFLICT DO NOTHING`,
     ).run({ taskId: task.id, pullRequestId: childId });
   }).immediate();
@@ -508,7 +506,6 @@ export function show(
       .query(
         `SELECT e.status, cs.cli, cs.external_session_id, gc.worktree_path, gc.branch
            FROM executions e JOIN cli_sessions cs ON cs.id = e.cli_session_id
-           LEFT JOIN session_runs sr ON sr.id = e.session_run_id
            LEFT JOIN git_checkouts gc ON gc.id = e.checkout_id
           WHERE e.task_id = $taskId ORDER BY e.started_at`,
       )
@@ -549,135 +546,6 @@ export function show(
       return lines.join("\n");
     })
     .join("\n\n");
-}
-
-export function listTasks(db: Database, options: { repoRoot?: string; status?: string }): string {
-  const rows = db
-    .query(
-      options.repoRoot
-        ? `SELECT DISTINCT t.id, t.linear_issue_id, t.title, t.status, t.updated_at
-             FROM tasks t
-             JOIN executions e ON e.task_id = t.id
-             JOIN git_checkouts gc ON gc.id = e.checkout_id
-            WHERE gc.repo_root = $repoRoot
-              AND ($status IS NULL OR t.status = $status)
-            ORDER BY t.updated_at DESC, t.linear_issue_id`
-        : `SELECT id, linear_issue_id, title, status, updated_at
-             FROM tasks
-            WHERE $status IS NULL OR status = $status
-            ORDER BY updated_at DESC, linear_issue_id`,
-    )
-    .all({ repoRoot: options.repoRoot ?? null, status: options.status ?? null }) as TaskRow[];
-  if (rows.length === 0) return "No tasks";
-  const groups = ["active", "open", "done", "cancelled"];
-  return groups
-    .map((status) => {
-      const tasks = rows.filter((row) => row.status === status);
-      if (tasks.length === 0) return null;
-      return [
-        `${status}:`,
-        ...tasks.map(
-          (task) =>
-            `  ${task.linear_issue_id}${task.title ? ` ${task.title}` : ""} updated=${task.updated_at}`,
-        ),
-      ].join("\n");
-    })
-    .filter((group) => group !== null)
-    .join("\n\n");
-}
-
-export function listPullRequests(db: Database, repoRoot?: string): string {
-  const rows = db
-    .query(
-      repoRoot
-        ? `SELECT DISTINCT pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch,
-                  parent.number AS parent_number, t.linear_issue_id, t.status, pr.created_at
-             FROM pull_requests pr
-             JOIN task_pull_requests tpr ON tpr.pull_request_id = pr.id
-             JOIN tasks t ON t.id = tpr.task_id
-             JOIN executions e ON e.task_id = t.id
-             JOIN git_checkouts gc ON gc.id = e.checkout_id
-             LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
-            WHERE gc.repo_root = $repoRoot
-            ORDER BY pr.created_at DESC, pr.repo, pr.number DESC`
-        : `SELECT pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch,
-                  parent.number AS parent_number, t.linear_issue_id, t.status, pr.created_at
-             FROM pull_requests pr
-             JOIN task_pull_requests tpr ON tpr.pull_request_id = pr.id
-             JOIN tasks t ON t.id = tpr.task_id
-             LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
-            ORDER BY pr.created_at DESC, pr.repo, pr.number DESC`,
-    )
-    .all({ repoRoot: repoRoot ?? null }) as Array<Record<string, unknown>>;
-  if (rows.length === 0) return "No pull requests";
-  return rows
-    .map((row) =>
-      `${row.repo}#${row.number} task=${row.linear_issue_id} [${row.status}]${row.parent_number ? ` parent=#${row.parent_number}` : ""} ${row.head_branch ?? "-"}->${row.base_branch ?? "-"} ${row.url ?? ""}`.trimEnd(),
-    )
-    .join("\n");
-}
-
-export function listRuns(
-  db: Database,
-  options: { repoRoot?: string; pullRequest?: number; branch?: string; worktreePath?: string },
-  liveTerminalIds?: Set<string>,
-): string {
-  const filtered =
-    options.pullRequest !== undefined ||
-    options.branch !== undefined ||
-    options.worktreePath !== undefined;
-  const query = db.query(
-    filtered
-      ? `SELECT sr.id, cs.cli, cs.external_session_id, sr.iterm_session_id,
-                  sr.started_cwd, sr.source, sr.last_seen_at, sr.ended_at, sr.end_reason,
-                  (julianday('now') - julianday(sr.last_seen_at)) >= 1 AS stale,
-                  group_concat(DISTINCT t.linear_issue_id) AS tasks,
-                  group_concat(DISTINCT gc.worktree_path) AS worktrees
-             FROM session_runs sr
-             JOIN cli_sessions cs ON cs.id = sr.cli_session_id
-             JOIN executions e ON e.session_run_id = sr.id
-             JOIN tasks t ON t.id = e.task_id
-             LEFT JOIN git_checkouts gc ON gc.id = e.checkout_id
-             LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
-             LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
-            WHERE ($pullRequest IS NULL OR pr.number = $pullRequest)
-              AND ($branch IS NULL OR gc.branch = $branch)
-              AND ($worktreePath IS NULL OR gc.worktree_path = $worktreePath)
-              AND ($repoRoot IS NULL OR gc.repo_root = $repoRoot)
-            GROUP BY sr.id
-            ORDER BY sr.last_seen_at DESC`
-      : `SELECT sr.id, cs.cli, cs.external_session_id, sr.iterm_session_id,
-                  sr.started_cwd, sr.source, sr.last_seen_at, sr.ended_at, sr.end_reason,
-                  (julianday('now') - julianday(sr.last_seen_at)) >= 1 AS stale,
-                  NULL AS tasks, NULL AS worktrees
-             FROM session_runs sr JOIN cli_sessions cs ON cs.id = sr.cli_session_id
-            WHERE sr.ended_at IS NULL ORDER BY sr.last_seen_at DESC`,
-  );
-  const rows = (
-    filtered
-      ? query.all({
-          pullRequest: options.pullRequest ?? null,
-          branch: options.branch ?? null,
-          worktreePath: options.worktreePath ?? null,
-          repoRoot: options.repoRoot ?? null,
-        })
-      : query.all()
-  ) as Array<Record<string, unknown>>;
-  if (rows.length === 0) return filtered ? "No related runs" : "No active runs";
-  return rows
-    .map((row) => {
-      const terminal = typeof row.iterm_session_id === "string" ? row.iterm_session_id : null;
-      const terminalId = terminal?.split(":").at(-1) ?? null;
-      const live =
-        liveTerminalIds === undefined || terminalId === null
-          ? "unknown"
-          : liveTerminalIds.has(terminalId)
-            ? "live"
-            : "closed";
-      const status = row.ended_at ? `ended:${row.end_reason ?? "unknown"}` : "active";
-      return `run=${row.id} session=${row.cli}:${row.external_session_id} status=${status}${row.stale && !row.ended_at ? " [stale]" : ""} pane=${live} source=${row.source ?? "-"} terminal=${terminal ?? "-"} last_seen=${row.last_seen_at} tasks=${row.tasks ?? "-"} worktrees=${row.worktrees ?? "-"} cwd=${row.started_cwd ?? "-"}`;
-    })
-    .join("\n");
 }
 
 export function findRunTerminal(db: Database, target: string): string {
