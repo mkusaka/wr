@@ -1,0 +1,38 @@
+{
+  automerge: true,
+  minimumReleaseAge: "7 days",
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:best-practices", "group:definitelyTyped"],
+  platformAutomerge: false,
+  packageRules: [
+    {
+      description: "Automerge non-major updates for production npm dependencies after 7 days",
+      groupName: "npm dependencies (non-major)",
+      matchManagers: ["npm"],
+      matchDepTypes: ["dependencies"],
+      matchUpdateTypes: ["minor", "patch", "pin"],
+      automerge: true,
+      automergeType: "pr",
+      minimumReleaseAge: "7 days",
+    },
+    {
+      description: "Automerge non-major updates for development npm dependencies after 7 days",
+      groupName: "npm devDependencies (non-major)",
+      matchManagers: ["npm"],
+      matchDepTypes: ["devDependencies"],
+      matchUpdateTypes: ["minor", "patch", "pin"],
+      automerge: true,
+      automergeType: "pr",
+      minimumReleaseAge: "7 days",
+    },
+    {
+      description: "Automerge non-major GitHub Actions updates after 7 days",
+      groupName: "github-actions (non-major)",
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch", "digest", "pinDigest"],
+      automerge: true,
+      automergeType: "pr",
+      minimumReleaseAge: "7 days",
+    },
+  ],
+}
