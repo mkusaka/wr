@@ -15,6 +15,10 @@ export const HookPayloadSchema = v.object({
   source: v.optional(NonEmptyStringSchema),
 });
 
+export const ConfigSchema = v.object({
+  repositories: v.array(NonEmptyStringSchema),
+});
+
 export const RepositorySchema = v.object({
   nameWithOwner: v.pipe(v.string(), v.regex(/^[^/]+\/[^/]+$/)),
 });
@@ -30,4 +34,5 @@ export const PositiveIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minVa
 
 export type SessionIdentity = v.InferOutput<typeof SessionIdentitySchema>;
 export type HookPayload = v.InferOutput<typeof HookPayloadSchema>;
+export type Config = v.InferOutput<typeof ConfigSchema>;
 export type PullRequestData = v.InferOutput<typeof PullRequestSchema>;

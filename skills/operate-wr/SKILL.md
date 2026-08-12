@@ -7,6 +7,23 @@ description: Operate the wr relationship-ledger CLI to register and inspect task
 
 Use `wr` only as a relationship ledger. Do not treat it as an orchestrator or dependency manager.
 
+## Check repository opt-in
+
+Inspect enabled repositories before recording work:
+
+```bash
+wr config list
+```
+
+Enable or disable the current repository only when the user has requested that tracking state:
+
+```bash
+wr config enable .
+wr config disable .
+```
+
+If the repository is not enabled and the user has not authorized opt-in, report that condition instead of enabling it implicitly. Enabling any linked worktree enables the whole repository.
+
 ## Inspect context
 
 Run `wr show` to inspect the current session and checkout. Use an explicit reverse lookup when the current context is unavailable:
@@ -56,5 +73,6 @@ Omit `--task` only when the current checkout has exactly one active task. If `wr
 
 - Do not edit the SQLite database directly.
 - Do not call `wr internal` manually; session hooks own those commands.
+- Do not enable repositories speculatively.
 - Do not infer task dependencies, start workflows, or synchronize GitHub state automatically.
 - Report ambiguity or command failure instead of creating speculative relationships.

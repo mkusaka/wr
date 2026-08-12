@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
+import { existsSync } from "node:fs";
 import * as v from "valibot";
-import { openDb } from "./db.ts";
+import {
+  disableRepository,
+  enableRepository,
+  isRepositoryEnabled,
+  readConfig,
+  requireEnabledRepository,
+} from "./config.ts";
+import { defaultDbPath, openDb } from "./db.ts";
 import {
   endSession,
   parseHookPayload,
@@ -24,6 +32,9 @@ const HELP = `wr - relationship ledger for tasks and CLI sessions
 Usage:
   wr internal session-event --cli codex|claude
   wr internal session-end --cli codex|claude
+  wr config enable [PATH]
+  wr config disable [PATH]
+  wr config list
   wr task start ISSUE [--title TITLE] [--worktree PATH] [--session CLI:ID]
   wr task done [ISSUE] [--session CLI:ID]
   wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session CLI:ID]
@@ -47,6 +58,30 @@ function requireInteger(value: string | undefined, label: string): number {
   }
 }
 
+function runConfig(args: string[]): void {
+  const action = args.shift();
+  const { positionals } = parseArgs({
+    args,
+    options: {},
+    allowPositionals: true,
+    strict: true,
+  });
+  if (action === "list") {
+    if (positionals.length !== 0) throw new Error("config list does not accept a path");
+    const repositories = readConfig().repositories;
+    console.log(repositories.length === 0 ? "No enabled repositories" : repositories.join("\n"));
+    return;
+  }
+  if (action !== "enable" && action !== "disable") {
+    throw new Error(`Unknown config command: ${action ?? ""}`);
+  }
+  if (positionals.length > 1) throw new Error(`config ${action} accepts at most one path`);
+  const path = positionals[0] ?? ".";
+  const result = action === "enable" ? enableRepository(path) : disableRepository(path);
+  const state = result.changed ? `${action}d` : `already ${action}d`;
+  console.log(`${state} ${result.repoRoot}`);
+}
+
 async function runInternal(args: string[]): Promise<void> {
   const action = args.shift();
   const { values } = parseArgs({
@@ -56,11 +91,16 @@ async function runInternal(args: string[]): Promise<void> {
   });
   const cli = requireCli(values.cli);
   const payload = parseHookPayload(await Bun.stdin.text());
-  const db = openDb(process.env.WR_DB_PATH);
+  if (action !== "session-event" && action !== "session-end") {
+    throw new Error(`Unknown internal command: ${action ?? ""}`);
+  }
+  if (action === "session-event" && !isRepositoryEnabled(payload.cwd)) return;
+  const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
+  if (action === "session-end" && !existsSync(dbPath)) return;
+  const db = openDb(dbPath);
   try {
     if (action === "session-event") registerSessionEvent(db, cli, payload);
-    else if (action === "session-end") endSession(db, cli, payload);
-    else throw new Error(`Unknown internal command: ${action ?? ""}`);
+    else endSession(db, cli, payload);
   } finally {
     db.close();
   }
@@ -83,32 +123,52 @@ async function main(): Promise<void> {
     return;
   }
 
-  const db = openDb(process.env.WR_DB_PATH);
-  try {
-    if (command === "sessions") {
-      parseArgs({ args, options: {}, strict: true });
-      console.log(listSessions(db));
-      return;
-    }
+  if (command === "config") {
+    runConfig(args);
+    return;
+  }
 
-    if (command === "show") {
-      const { values } = parseArgs({
-        args,
-        options: {
-          session: { type: "string" },
-          task: { type: "string" },
-          worktree: { type: "string" },
-        },
-        strict: true,
-      });
-      const { session: explicitSession, task, worktree } = values;
-      if (task && worktree) throw new Error("--task and --worktree cannot be used together");
+  if (command === "sessions") {
+    parseArgs({ args, options: {}, strict: true });
+    const db = openDb(process.env.WR_DB_PATH);
+    try {
+      console.log(listSessions(db));
+    } finally {
+      db.close();
+    }
+    return;
+  }
+
+  if (command === "show") {
+    const { values } = parseArgs({
+      args,
+      options: {
+        session: { type: "string" },
+        task: { type: "string" },
+        worktree: { type: "string" },
+      },
+      strict: true,
+    });
+    const { session: explicitSession, task, worktree } = values;
+    if (task && worktree) throw new Error("--task and --worktree cannot be used together");
+    if (!task && !worktree) requireEnabledRepository(process.cwd());
+    const db = openDb(process.env.WR_DB_PATH);
+    try {
       const current =
         task || worktree ? null : resolveCurrentContext(db, process.cwd(), explicitSession);
       console.log(show(db, current, { task, worktree }));
-      return;
+    } finally {
+      db.close();
     }
+    return;
+  }
 
+  if (command !== "task" && command !== "pr" && command !== "link") {
+    throw new Error(`Unknown command: ${command ?? ""}`);
+  }
+  requireEnabledRepository(process.cwd());
+  const db = openDb(process.env.WR_DB_PATH);
+  try {
     if (command === "task") {
       const action = args.shift();
       if (action === "start") {
@@ -124,6 +184,7 @@ async function main(): Promise<void> {
         });
         if (positionals.length !== 1) throw new Error("A task ID is required");
         const issue = positionals[0]!;
+        if (values.worktree) requireEnabledRepository(values.worktree);
         const current = resolveCurrentContext(db, process.cwd(), values.session);
         const { title, worktree } = values;
         const result = startTask(db, current, issue, { title, worktree });

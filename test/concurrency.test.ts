@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { enableRepository } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -7,10 +8,12 @@ test("concurrent starts do not create duplicate executions", async () => {
   const dataHome = tempDir("wr-concurrent");
   const env = {
     ...process.env,
+    XDG_CONFIG_HOME: tempDir("wr-concurrent-config"),
     XDG_DATA_HOME: dataHome,
     CODEX_THREAD_ID: "concurrent-session",
     TERM_SESSION_ID: "concurrent-terminal",
   };
+  enableRepository(process.cwd(), env);
   const processes = Array.from({ length: 6 }, () =>
     Bun.spawn(["bun", "src/cli.ts", "task", "start", "TASK-CONCURRENT"], {
       cwd: process.cwd(),
@@ -52,10 +55,12 @@ test("restarting a completed task reports reopen on stderr", async () => {
   const dataHome = tempDir("wr-reopen");
   const env = {
     ...process.env,
+    XDG_CONFIG_HOME: tempDir("wr-reopen-config"),
     XDG_DATA_HOME: dataHome,
     CODEX_THREAD_ID: "reopen-session",
     TERM_SESSION_ID: "reopen-terminal",
   };
+  enableRepository(process.cwd(), env);
   for (const args of [
     ["task", "start", "TASK-REOPEN"],
     ["task", "done", "TASK-REOPEN"],
