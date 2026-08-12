@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as v from "valibot";
 import {
   defaultConfigPath,
   disableRepository,
@@ -10,6 +11,7 @@ import {
 } from "../src/config.ts";
 import { discoverCheckout } from "../src/git.ts";
 import { openDb } from "../src/db.ts";
+import { CountRowSchema, NonEmptyStringSchema } from "../src/validation.ts";
 import { tempDir } from "./helpers.ts";
 
 test("enables and disables a canonical repository root", () => {
@@ -93,7 +95,7 @@ test("session hooks skip disabled repositories and register enabled repositories
   const db = openDb(dbPath);
   try {
     expect(
-      (db.query("SELECT COUNT(*) AS count FROM cli_sessions").get() as { count: number }).count,
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM cli_sessions").get()).count,
     ).toBe(1);
   } finally {
     db.close();
@@ -113,9 +115,10 @@ test("session hooks skip disabled repositories and register enabled repositories
   expect(await end.exited).toBe(0);
   const endedDb = openDb(dbPath);
   try {
-    const run = endedDb.query("SELECT end_reason FROM session_runs").get() as {
-      end_reason: string;
-    };
+    const run = v.parse(
+      v.object({ end_reason: NonEmptyStringSchema }),
+      endedDb.query("SELECT end_reason FROM session_runs").get(),
+    );
     expect(run.end_reason).toBe("session_end");
   } finally {
     endedDb.close();

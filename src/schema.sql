@@ -2,8 +2,8 @@ CREATE TABLE tasks (
   id               TEXT PRIMARY KEY,
   linear_issue_id  TEXT UNIQUE,
   title            TEXT,
-  status           TEXT NOT NULL DEFAULT 'active'
-                   CHECK (status IN ('active','done','cancelled')),
+  status           TEXT NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','active','done','cancelled')),
   created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -77,12 +77,18 @@ CREATE TABLE task_pull_requests (
 
 CREATE TABLE task_links (
   id             TEXT PRIMARY KEY,
-  task_id        TEXT NOT NULL REFERENCES tasks(id),
+  task_id        TEXT REFERENCES tasks(id),
+  checkout_id    TEXT NOT NULL REFERENCES git_checkouts(id),
   kind           TEXT NOT NULL,
   ref            TEXT NOT NULL,
-  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(task_id, kind, ref)
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX idx_task_links_task_ref
+  ON task_links(task_id, checkout_id, kind, ref) WHERE task_id IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_task_links_checkout_ref
+  ON task_links(checkout_id, kind, ref) WHERE task_id IS NULL;
 
 CREATE INDEX idx_runs_active_terminal
   ON session_runs(iterm_session_id, last_seen_at)

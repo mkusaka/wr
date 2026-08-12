@@ -22,7 +22,7 @@ export function renderResource(
     if (jqExpression !== undefined) throw new Error("--jq requires --json");
     if (rows.length === 0) return `No ${resource}`;
     if (resource === "tasks") {
-      return ["active", "done", "cancelled"]
+      return ["open", "active", "done", "cancelled"]
         .map((status) => {
           const tasks = rows.filter((row) => row.status === status);
           if (tasks.length === 0) return null;

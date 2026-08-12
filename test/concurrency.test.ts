@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import * as v from "valibot";
 import { enableRepository } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
+import { CountRowSchema } from "../src/validation.ts";
 import { tempDir } from "./helpers.ts";
 
 test("concurrent starts do not create duplicate executions", async () => {
@@ -33,17 +35,16 @@ test("concurrent starts do not create duplicate executions", async () => {
 
   const db = openDb(join(dataHome, "wr", "wr.db"));
   try {
-    expect((db.query("SELECT COUNT(*) AS count FROM tasks").get() as { count: number }).count).toBe(
-      1,
-    );
     expect(
-      (db.query("SELECT COUNT(*) AS count FROM executions").get() as { count: number }).count,
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM tasks").get()).count,
     ).toBe(1);
     expect(
-      (
-        db.query("SELECT COUNT(*) AS count FROM session_runs WHERE ended_at IS NULL").get() as {
-          count: number;
-        }
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM executions").get()).count,
+    ).toBe(1);
+    expect(
+      v.parse(
+        CountRowSchema,
+        db.query("SELECT COUNT(*) AS count FROM session_runs WHERE ended_at IS NULL").get(),
       ).count,
     ).toBe(1);
   } finally {

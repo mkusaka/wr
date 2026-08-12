@@ -4,11 +4,19 @@ import * as v from "valibot";
 import { discoverCheckout, type Checkout } from "./git.ts";
 import { newId } from "./db.ts";
 import {
+  CliSchema,
   HookPayloadSchema,
+  IdRowSchema,
+  NonEmptyStringSchema,
   SessionIdentitySchema,
   type HookPayload,
   type SessionIdentity,
 } from "./validation.ts";
+
+const DbSessionIdentitySchema = v.object({
+  cli: CliSchema,
+  external_session_id: NonEmptyStringSchema,
+});
 
 export type Cli = "codex" | "claude";
 
@@ -35,7 +43,6 @@ export function findCurrentSession(
   db: Database,
   env: NodeJS.ProcessEnv = process.env,
 ): SessionIdentity | null {
-  if (env.WR_CLI_SESSION) return parseSessionIdentity(env.WR_CLI_SESSION);
   if (env.CODEX_THREAD_ID) {
     return v.parse(SessionIdentitySchema, {
       cli: "codex",
@@ -48,28 +55,32 @@ export function findCurrentSession(
       externalSessionId: env.CLAUDE_CODE_SESSION_ID,
     });
   }
+  if (env.WR_CLI_SESSION) return parseSessionIdentity(env.WR_CLI_SESSION);
   if (!env.TERM_SESSION_ID) return null;
-  const row = db
-    .query(
-      `SELECT cs.cli, cs.external_session_id
-         FROM session_runs sr
-         JOIN cli_sessions cs ON cs.id = sr.cli_session_id
-        WHERE sr.iterm_session_id = $terminalId AND sr.ended_at IS NULL
-        ORDER BY sr.last_seen_at DESC LIMIT 1`,
-    )
-    .get({ terminalId: env.TERM_SESSION_ID }) as {
-    cli: Cli;
-    external_session_id: string;
-  } | null;
+  const row = v.parse(
+    v.nullable(DbSessionIdentitySchema),
+    db
+      .query(
+        `SELECT cs.cli, cs.external_session_id
+           FROM session_runs sr
+           JOIN cli_sessions cs ON cs.id = sr.cli_session_id
+          WHERE sr.iterm_session_id = $terminalId AND sr.ended_at IS NULL
+          ORDER BY sr.last_seen_at DESC LIMIT 1`,
+      )
+      .get({ terminalId: env.TERM_SESSION_ID }),
+  );
   return row ? { cli: row.cli, externalSessionId: row.external_session_id } : null;
 }
 
 function ensureCliSession(db: Database, identity: SessionIdentity): string {
-  const existing = db
-    .query(
-      "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
-    )
-    .get(identity) as { id: string } | null;
+  const existing = v.parse(
+    v.nullable(IdRowSchema),
+    db
+      .query(
+        "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
+      )
+      .get(identity),
+  );
   if (existing) return existing.id;
   const id = newId();
   db.query(
@@ -83,11 +94,14 @@ function ensureCliSession(db: Database, identity: SessionIdentity): string {
 
 export function ensureCheckout(db: Database, checkout: Checkout | null): string | null {
   if (!checkout) return null;
-  const existing = db
-    .query(
-      "SELECT id FROM git_checkouts WHERE repo_root = $repoRoot AND worktree_path = $worktreePath",
-    )
-    .get(checkout) as { id: string } | null;
+  const existing = v.parse(
+    v.nullable(IdRowSchema),
+    db
+      .query(
+        "SELECT id FROM git_checkouts WHERE repo_root = $repoRoot AND worktree_path = $worktreePath",
+      )
+      .get(checkout),
+  );
   if (existing) {
     db.query("UPDATE git_checkouts SET branch = $branch WHERE id = $id").run({
       id: existing.id,
@@ -144,19 +158,25 @@ export function registerSessionEvent(
   const cwd = realpathSync(payload.cwd);
 
   if (source === "compact") {
-    const session = db
-      .query(
-        "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
-      )
-      .get(identity) as { id: string } | null;
+    const session = v.parse(
+      v.nullable(IdRowSchema),
+      db
+        .query(
+          "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
+        )
+        .get(identity),
+    );
     if (!session) return { cliSessionId: "", sessionRunId: null };
-    const run = db
-      .query(
-        terminalId
-          ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
-          : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
-      )
-      .get({ sessionId: session.id, terminalId }) as { id: string } | null;
+    const run = v.parse(
+      v.nullable(IdRowSchema),
+      db
+        .query(
+          terminalId
+            ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
+            : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
+        )
+        .get({ sessionId: session.id, terminalId }),
+    );
     if (run) {
       db.transaction(() => {
         db.query("UPDATE session_runs SET last_seen_at = CURRENT_TIMESTAMP WHERE id = $id").run(
@@ -201,20 +221,26 @@ export function endSession(
   payload: HookPayload,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const session = db
-    .query(
-      "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
-    )
-    .get({ cli, externalSessionId: payload.session_id }) as { id: string } | null;
+  const session = v.parse(
+    v.nullable(IdRowSchema),
+    db
+      .query(
+        "SELECT id FROM cli_sessions WHERE cli = $cli AND external_session_id = $externalSessionId",
+      )
+      .get({ cli, externalSessionId: payload.session_id }),
+  );
   if (!session) return null;
   const terminalId = env.TERM_SESSION_ID || null;
-  const run = db
-    .query(
-      terminalId
-        ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
-        : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
-    )
-    .get({ sessionId: session.id, terminalId }) as { id: string } | null;
+  const run = v.parse(
+    v.nullable(IdRowSchema),
+    db
+      .query(
+        terminalId
+          ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
+          : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
+      )
+      .get({ sessionId: session.id, terminalId }),
+  );
   if (!run) return null;
   db.query(
     "UPDATE session_runs SET ended_at = CURRENT_TIMESTAMP, end_reason = 'session_end', last_seen_at = CURRENT_TIMESTAMP WHERE id = $id",
@@ -230,16 +256,21 @@ export function resolveCurrentContext(
 ): CurrentContext {
   const automatic = findCurrentSession(db, env);
   let requestedRunId: string | null = null;
-  if (env.WR_CLI_SESSION) requestedRunId = env.WR_SESSION_RUN_ID || null;
+  if (automatic && env.WR_CLI_SESSION === `${automatic.cli}:${automatic.externalSessionId}`) {
+    requestedRunId = env.WR_SESSION_RUN_ID || null;
+  }
 
   if (automatic && explicitSession && automatic.externalSessionId !== explicitSession) {
     throw new Error("The discovered session conflicts with --session");
   }
   let identity = automatic;
   if (!identity && explicitSession) {
-    const rows = db
-      .query("SELECT cli, external_session_id FROM cli_sessions WHERE external_session_id = $id")
-      .all({ id: explicitSession }) as Array<{ cli: Cli; external_session_id: string }>;
+    const rows = v.parse(
+      v.array(DbSessionIdentitySchema),
+      db
+        .query("SELECT cli, external_session_id FROM cli_sessions WHERE external_session_id = $id")
+        .all({ id: explicitSession }),
+    );
     if (rows.length > 1) throw new Error(`Session ID is ambiguous: ${explicitSession}`);
     if (rows.length === 1)
       identity = { cli: rows[0]!.cli, externalSessionId: rows[0]!.external_session_id };
@@ -258,20 +289,26 @@ export function resolveCurrentContext(
       terminalId: env.TERM_SESSION_ID || null,
     };
     let run = requestedRunId
-      ? (db
-          .query(
-            "SELECT id FROM session_runs WHERE id = $runId AND cli_session_id = $sessionId AND ended_at IS NULL",
-          )
-          .get(params) as { id: string } | null)
+      ? v.parse(
+          v.nullable(IdRowSchema),
+          db
+            .query(
+              "SELECT id FROM session_runs WHERE id = $runId AND cli_session_id = $sessionId AND ended_at IS NULL",
+            )
+            .get(params),
+        )
       : null;
     if (!run) {
-      run = db
-        .query(
-          params.terminalId
-            ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
-            : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
-        )
-        .get(params) as { id: string } | null;
+      run = v.parse(
+        v.nullable(IdRowSchema),
+        db
+          .query(
+            params.terminalId
+              ? "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND iterm_session_id = $terminalId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1"
+              : "SELECT id FROM session_runs WHERE cli_session_id = $sessionId AND ended_at IS NULL ORDER BY last_seen_at DESC LIMIT 1",
+          )
+          .get(params),
+      );
     }
     if (run) {
       sessionRunId = run.id;

@@ -67,8 +67,11 @@ If session discovery fails, pass the existing session ID with `--session`. Do no
 Start an execution after selecting the task and checkout:
 
 ```bash
+wr task add MAL-122 --title "Queued task"
 wr task start MAL-123 --title "Task title" --worktree .
 ```
+
+Use `wr task add` to register unstarted work with `open` status. It does not require a CLI session and does not create an execution. Repeating it preserves the current status and only updates an explicitly provided title.
 
 Complete only the selected task:
 
@@ -89,22 +92,26 @@ Starting a completed task reopens it and reports that change. Completing a task 
 Register a GitHub pull request from its checkout. This command calls `gh` and writes nothing if GitHub lookup fails:
 
 ```bash
+wr pr add 122
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-124 --parent 123
 wr pr remove 123 --task MAL-123
 wr sync
 ```
 
-After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. It checks the current checkout and active checkouts in the current CLI session. If it reports multiple active tasks, use `wr pr add --task` explicitly instead of guessing.
+When `--task` is omitted, `wr pr add` links the pull request if the current checkout has exactly one active task. With no active task or multiple active tasks, it registers the pull request without a task relationship. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. It applies the same linking rule to the current checkout and active checkouts in the current CLI session.
 
 Register a workpad:
 
 ```bash
+wr link workpad ./workpad.md
+wr link workpad MOQ-1291
 wr link workpad ./workpad.md --task MAL-123
+wr link remove workpad MOQ-1291
 wr link remove workpad ./workpad.md --task MAL-123
 ```
 
-Omit `--task` only when the current checkout has exactly one active task. If `wr` reports ambiguity, inspect the context and provide `--task`; never guess.
+Workpad references may be existing paths or identifiers such as task IDs. Existing paths are normalized. Workpads are always associated with the current checkout. When `--task` is omitted, `wr` links the workpad to a task if the checkout has exactly one active task. With no active task or multiple active tasks, it stores or removes the checkout's workpad without a task relationship.
 
 ## Preserve boundaries
 

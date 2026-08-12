@@ -2,10 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as v from "valibot";
 import { startTask } from "../src/commands.ts";
 import { resolveCurrentContext } from "../src/context.ts";
 import { renderResource } from "../src/output.ts";
 import { queryResource, type ResourceName } from "../src/resources.ts";
+import { IdRowSchema } from "../src/validation.ts";
 import { tempDir, testContext, testDb } from "./helpers.ts";
 
 let db: Database | null = null;
@@ -15,13 +17,14 @@ function relatedRecords() {
   db = testDb();
   const current = testContext(db, "resource-session");
   const started = startTask(db, current, "MAL-123", { title: "Related records" });
-  const task = db.query("SELECT id FROM tasks WHERE linear_issue_id = 'MAL-123'").get() as {
-    id: string;
-  };
+  const task = v.parse(
+    IdRowSchema,
+    db.query("SELECT id FROM tasks WHERE linear_issue_id = 'MAL-123'").get(),
+  );
   db.query(
-    `INSERT INTO task_links (id, task_id, kind, ref)
-     VALUES ('link-1', $taskId, 'workpad', '/tmp/workpad.md')`,
-  ).run({ taskId: task.id });
+    `INSERT INTO task_links (id, task_id, checkout_id, kind, ref)
+     VALUES ('link-1', $taskId, $checkoutId, 'workpad', '/tmp/workpad.md')`,
+  ).run({ taskId: task.id, checkoutId: current.checkoutId });
   db.query(
     `INSERT INTO pull_requests
        (id, repo, number, url, head_branch, base_branch)
@@ -105,6 +108,30 @@ describe("resource queries", () => {
     expect(queryResource(db, "executions", filter)).toEqual([]);
   });
 
+  test("finds an unassigned workpad from its checkout and repository", () => {
+    db = testDb();
+    const current = testContext(db, "unassigned-link-session");
+    db.query(
+      `INSERT INTO task_links (id, task_id, checkout_id, kind, ref)
+       VALUES ('unassigned-link', NULL, $checkoutId, 'workpad', '/tmp/unassigned.md')`,
+    ).run({ checkoutId: current.checkoutId });
+
+    expect(queryResource(db, "links", {})[0]).toEqual(
+      expect.objectContaining({
+        id: "unassigned-link",
+        linearIssueId: null,
+        worktreePath: current.checkout!.worktreePath,
+      }),
+    );
+    expect(queryResource(db, "links", { repoRoot: current.checkout!.repoRoot })).toHaveLength(1);
+    expect(
+      queryResource(db, "links", { worktreePath: current.checkout!.worktreePath }),
+    ).toHaveLength(1);
+    expect(queryResource(db, "checkouts", { link: "unassigned-link" })[0]?.id).toBe(
+      current.checkoutId,
+    );
+  });
+
   test("orders tasks by most recent update", () => {
     const { current } = relatedRecords();
     startTask(db!, current, "MAL-OLD", {});
@@ -146,8 +173,11 @@ describe("resource output", () => {
     const output = renderResource("tasks", [
       { linearIssueId: "MAL-1", status: "done", title: "Done", updatedAt: "2026-01-01" },
       { linearIssueId: "MAL-2", status: "active", title: "Active", updatedAt: "2026-01-02" },
+      { linearIssueId: "MAL-3", status: "open", title: "Open", updatedAt: "2026-01-03" },
     ]);
+    expect(output.indexOf("open:")).toBeLessThan(output.indexOf("active:"));
     expect(output.indexOf("active:")).toBeLessThan(output.indexOf("done:"));
+    expect(output).toContain("MAL-3 Open updated=2026-01-03");
     expect(output).toContain("MAL-2 Active updated=2026-01-02");
   });
 

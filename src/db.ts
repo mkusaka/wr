@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import * as v from "valibot";
 import schema from "./schema.sql" with { type: "text" };
+import { CountRowSchema, DbIntegerSchema } from "./validation.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function defaultDbPath(env: NodeJS.ProcessEnv = process.env): string {
   const dataHome = env.XDG_DATA_HOME || (env.HOME ? join(env.HOME, ".local", "share") : undefined);
@@ -19,15 +21,21 @@ export function openDb(path = defaultDbPath()): Database {
   db.run("PRAGMA foreign_keys = ON");
 
   const readVersion = () => {
-    const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
+    const row = v.parse(
+      v.nullable(v.object({ user_version: DbIntegerSchema })),
+      db.query("PRAGMA user_version").get(),
+    );
     return Number(row?.user_version ?? 0);
   };
   const hasTables = () => {
-    const row = db
-      .query(
-        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .get() as { count: number } | null;
+    const row = v.parse(
+      v.nullable(CountRowSchema),
+      db
+        .query(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .get(),
+    );
     return Number(row?.count ?? 0) > 0;
   };
 

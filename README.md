@@ -68,16 +68,20 @@ The hooks only register their stdin JSON in SQLite and never access the network.
 ```bash
 wr config enable .
 
+wr task add MAL-122 --title "Queued task"
 wr task start MAL-123 --title "Task title" --worktree .
 wr task done MAL-123
 wr task cancel MAL-123
 
+wr pr add 122
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-123 --parent 123
 wr pr remove 123 --task MAL-123
 wr sync
+wr link workpad ./workpad.md
+wr link workpad MOQ-1291
 wr link workpad ./workpad.md --task MAL-123
-wr link remove workpad ./workpad.md --task MAL-123
+wr link remove workpad MOQ-1291
 
 wr show
 wr doctor
@@ -105,11 +109,17 @@ wr tasks --json
 wr tasks --limit 20
 ```
 
-Commands that omit a task infer it only when the current checkout has exactly one active task. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
+Commands that require a task infer an omitted task only when the current checkout has exactly one active task. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
+
+`wr task add` registers an unstarted task with `open` status without creating a session, checkout, or execution relationship. Repeating it preserves the current status and updates the title only when `--title` is provided. `wr task start` changes an open task to `active`.
+
+`wr pr add` can register a pull request without a task. When `--task` is omitted, it links the pull request if the current checkout has exactly one active task and otherwise stores the pull request without a task relationship.
+
+`wr link workpad` accepts an existing path or an identifier such as a task ID. Existing paths are normalized before storage. It always associates the workpad with the current checkout and can register it without a task. When `--task` is omitted, it links the workpad to a task if the current checkout has exactly one active task and otherwise stores the workpad without a task relationship. `wr link remove workpad` applies the same normalization and task inference rule and removes the matching relationship from the current checkout.
 
 `wr task done` closes executions for the selected task only. Executions in the current CLI session become `finished`; executions in other sessions become `abandoned`. Executions for other tasks in the same session remain untouched.
 
-`wr task cancel` marks the selected task as `cancelled` and abandons all of its active executions. It is idempotent and does not alter executions for other tasks. `wr link remove workpad` removes only the relationship; it does not delete the workpad file.
+`wr task cancel` marks the selected task as `cancelled` and abandons all of its active executions. It is idempotent and does not alter executions for other tasks. `wr link remove workpad` removes only the ledger record; it does not delete the workpad file.
 
 Resource commands are scoped to the current repository when run inside a Git checkout and use the global ledger otherwise. Pass `--global` to override repository scoping or `--repo PATH` to select a repository explicitly. All resource commands accept relationship filters: `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--worktree`, `--branch`, and `--pr`. `--session` accepts a Codex thread ID or Claude session ID without a CLI prefix. If the same external ID exists for both clients, the command reports ambiguity. `--task` accepts the Linear issue identifier stored in the ledger. Use `--limit NUMBER` to bound the filtered and ordered results. Tasks are ordered by `updated_at` descending.
 
@@ -117,7 +127,7 @@ Resource commands are scoped to the current repository when run inside a Git che
 
 Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` to filter that JSON with the installed `jq` command. Pass `--json` without a value to list the available fields for a resource.
 
-`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and links it only when that checkout has exactly one active task. GitHub lookup failures and ambiguous tasks stop the command before any database writes.
+`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and links it only when that checkout has exactly one active task. With no active task or multiple active tasks, it stores the pull request without a task relationship. GitHub lookup failures stop the command before any database writes.
 
 `wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Run-to-Checkout and Execution relationships, so no GitHub or Linear network lookup is performed.
 

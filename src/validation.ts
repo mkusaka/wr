@@ -32,7 +32,7 @@ export const PullRequestSchema = v.object({
 
 export const PullRequestListSchema = v.array(PullRequestSchema);
 
-export const TaskStatusSchema = v.picklist(["active", "done", "cancelled"]);
+export const TaskStatusSchema = v.picklist(["open", "active", "done", "cancelled"]);
 
 export const ExecutionStatusSchema = v.picklist(["active", "finished", "abandoned"]);
 
@@ -56,6 +56,16 @@ export const ResourceNameSchema = v.picklist([
 export const ITermSessionListSchema = v.array(v.object({ id: NonEmptyStringSchema }));
 
 export const PositiveIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+
+export const DbIntegerSchema = v.pipe(v.number(), v.safeInteger());
+
+export const CountRowSchema = v.object({ count: DbIntegerSchema });
+
+export const IdRowSchema = v.object({ id: NonEmptyStringSchema });
+
+const RecordSchema = v.record(v.string(), v.unknown());
+
+export const RecordListSchema = v.array(RecordSchema);
 
 export type SessionIdentity = v.InferOutput<typeof SessionIdentitySchema>;
 export type HookPayload = v.InferOutput<typeof HookPayloadSchema>;

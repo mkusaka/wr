@@ -23,6 +23,7 @@ import {
 } from "./context.ts";
 import {
   addPullRequest,
+  addTask,
   addWorkpadLink,
   cancelTask,
   doneTask,
@@ -42,39 +43,19 @@ import {
 } from "./resources.ts";
 import {
   CliSchema,
+  DbIntegerSchema,
   ExecutionStatusSchema,
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
+  RecordListSchema,
   RepositoryStatusSchema,
   ResourceNameSchema,
   RunStatusSchema,
   TaskStatusSchema,
 } from "./validation.ts";
 
-const HELP = `wr - relationship ledger for tasks and CLI sessions
-
-Usage:
-  wr internal session-event --cli codex|claude
-  wr internal session-end --cli codex|claude
-  wr config enable [PATH]
-  wr config disable [PATH]
-  wr config list
-  wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
-  wr task done [ISSUE] [--session ID]
-  wr task cancel [ISSUE] [--session ID]
-  wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
-  wr pr remove NUMBER [--task ISSUE] [--session ID]
-  wr link workpad PATH [--task ISSUE] [--session ID]
-  wr link remove workpad PATH [--task ISSUE] [--session ID]
-  wr show [--task ISSUE | --worktree PATH] [--session ID]
-  wr sync [--session ID]
-  wr doctor
-  wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals|repos [FILTERS]
-  wr runs focus SESSION_ID|RUN_ID
-  wr terminals focus TERMINAL_ID
-
-Resource filters:
+const RESOURCE_FILTER_HELP = `Resource filters:
   --task ISSUE          Linear issue identifier
   --session ID          Codex thread ID or Claude session ID
   --run ID              Session run ID
@@ -92,6 +73,73 @@ Resource filters:
   --global              Do not infer repository scope from cwd
   --json FIELDS         Output selected comma-separated fields; omit value to list fields
   --jq, -q EXPR         Filter JSON output with jq`;
+
+const HELP = `wr - relationship ledger for tasks and CLI sessions
+
+Usage:
+  wr internal session-event --cli codex|claude
+  wr internal session-end --cli codex|claude
+  wr config enable [PATH]
+  wr config disable [PATH]
+  wr config list
+  wr task add ISSUE [--title TITLE]
+  wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
+  wr task done [ISSUE] [--session ID]
+  wr task cancel [ISSUE] [--session ID]
+  wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
+  wr pr remove NUMBER [--task ISSUE] [--session ID]
+  wr link workpad REF [--task ISSUE] [--session ID]
+  wr link remove workpad REF [--task ISSUE] [--session ID]
+  wr show [--task ISSUE | --worktree PATH] [--session ID]
+  wr sync [--session ID]
+  wr doctor
+  wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals|repos [FILTERS]
+  wr runs focus SESSION_ID|RUN_ID
+  wr terminals focus TERMINAL_ID
+
+${RESOURCE_FILTER_HELP}`;
+
+const CONFIG_HELP = `Usage:
+  wr config enable [PATH]
+  wr config disable [PATH]
+  wr config list`;
+
+const TASK_HELP = `Usage:
+  wr task add ISSUE [--title TITLE]
+  wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
+  wr task done [ISSUE] [--session ID]
+  wr task cancel [ISSUE] [--session ID]`;
+
+const PR_HELP = `Usage:
+  wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
+  wr pr remove NUMBER [--task ISSUE] [--session ID]`;
+
+const LINK_HELP = `Usage:
+  wr link workpad REF [--task ISSUE] [--session ID]
+  wr link remove workpad REF [--task ISSUE] [--session ID]`;
+
+const SHOW_HELP = `Usage:
+  wr show [--task ISSUE | --worktree PATH] [--session ID]`;
+
+const SYNC_HELP = `Usage:
+  wr sync [--session ID]`;
+
+const DOCTOR_HELP = `Usage:
+  wr doctor`;
+
+function helpRequested(args: string[]): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+function resourceHelp(resource: ResourceName): string {
+  const focus =
+    resource === "runs"
+      ? "\n  wr runs focus SESSION_ID|RUN_ID"
+      : resource === "terminals"
+        ? "\n  wr terminals focus TERMINAL_ID"
+        : "";
+  return `Usage:\n  wr ${resource} [FILTERS]${focus}\n\n${RESOURCE_FILTER_HELP}`;
+}
 
 function requireCli(value: string | undefined): Cli {
   try {
@@ -152,7 +200,7 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
     if (resource === "runs" || resource === "terminals") return v.parse(RunStatusSchema, value);
     if (resource === "repos") return v.parse(RepositoryStatusSchema, value);
   } catch {
-    if (resource === "tasks") throw new Error("--status must be active, done, or cancelled");
+    if (resource === "tasks") throw new Error("--status must be open, active, done, or cancelled");
     if (resource === "executions")
       throw new Error("--status must be active, finished, or abandoned");
     if (resource === "repos") throw new Error("--status must be active or inactive");
@@ -256,8 +304,11 @@ function runDoctor(): void {
   } else {
     const db = new Database(dbPath, { readonly: true, strict: true });
     try {
-      const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      const quickRows = db.query("PRAGMA quick_check").all() as Array<Record<string, unknown>>;
+      const version = v.parse(
+        v.object({ user_version: DbIntegerSchema }),
+        db.query("PRAGMA user_version").get(),
+      );
+      const quickRows = v.parse(RecordListSchema, db.query("PRAGMA quick_check").all());
       const quick = quickRows.every((row) => Object.values(row)[0] === "ok") ? "ok" : "failed";
       const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all().length;
       lines.push(
@@ -267,15 +318,18 @@ function runDoctor(): void {
       if (!identity) {
         lines.push("session status=not-detected");
       } else {
-        const row = db
-          .query(
-            `SELECT cs.id, COUNT(sr.id) AS activeRuns
-               FROM cli_sessions cs
-               LEFT JOIN session_runs sr ON sr.cli_session_id = cs.id AND sr.ended_at IS NULL
-              WHERE cs.cli = $cli AND cs.external_session_id = $externalSessionId
-              GROUP BY cs.id`,
-          )
-          .get(identity) as { id: string; activeRuns: number } | null;
+        const row = v.parse(
+          v.nullable(v.object({ id: NonEmptyStringSchema, activeRuns: DbIntegerSchema })),
+          db
+            .query(
+              `SELECT cs.id, COUNT(sr.id) AS activeRuns
+                 FROM cli_sessions cs
+                 LEFT JOIN session_runs sr ON sr.cli_session_id = cs.id AND sr.ended_at IS NULL
+                WHERE cs.cli = $cli AND cs.external_session_id = $externalSessionId
+                GROUP BY cs.id`,
+            )
+            .get(identity),
+        );
         lines.push(
           `session identity=${identity.cli}:${identity.externalSessionId} registered=${row ? "yes" : "no"} active_runs=${row?.activeRuns ?? 0}`,
         );
@@ -311,6 +365,10 @@ function runDoctor(): void {
 }
 
 function runConfig(args: string[]): void {
+  if (helpRequested(args)) {
+    console.log(CONFIG_HELP);
+    return;
+  }
   const action = args.shift();
   const { positionals } = parseArgs({
     args,
@@ -381,12 +439,20 @@ async function main(): Promise<void> {
   }
 
   if (command === "doctor") {
+    if (helpRequested(args)) {
+      console.log(DOCTOR_HELP);
+      return;
+    }
     if (args.length !== 0) throw new Error("doctor does not accept arguments");
     runDoctor();
     return;
   }
 
   const resource = requireResource(command);
+  if (resource && helpRequested(args)) {
+    console.log(resourceHelp(resource));
+    return;
+  }
   if (resource && (resource === "runs" || resource === "terminals") && args[0] === "focus") {
     args.shift();
     const db = openDb(process.env.WR_DB_PATH);
@@ -424,6 +490,10 @@ async function main(): Promise<void> {
   }
 
   if (command === "sync") {
+    if (helpRequested(args)) {
+      console.log(SYNC_HELP);
+      return;
+    }
     requireEnabledRepository(process.cwd());
     const { values } = parseArgs({
       args,
@@ -444,6 +514,10 @@ async function main(): Promise<void> {
   }
 
   if (command === "show") {
+    if (helpRequested(args)) {
+      console.log(SHOW_HELP);
+      return;
+    }
     const { values } = parseArgs({
       args,
       options: {
@@ -470,11 +544,27 @@ async function main(): Promise<void> {
   if (command !== "task" && command !== "pr" && command !== "link") {
     throw new Error(`Unknown command: ${command ?? ""}`);
   }
+  if (helpRequested(args)) {
+    console.log(command === "task" ? TASK_HELP : command === "pr" ? PR_HELP : LINK_HELP);
+    return;
+  }
   requireEnabledRepository(process.cwd());
   const db = openDb(process.env.WR_DB_PATH);
   try {
     if (command === "task") {
       const action = args.shift();
+      if (action === "add") {
+        const { values, positionals } = parseArgs({
+          args,
+          options: { title: { type: "string" } },
+          allowPositionals: true,
+          strict: true,
+        });
+        if (positionals.length !== 1 || !positionals[0]) throw new Error("A task ID is required");
+        const result = addTask(db, positionals[0], values.title);
+        console.log(`registered ${result.issue} status=${result.status}`);
+        return;
+      }
       if (action === "start") {
         const { values, positionals } = parseArgs({
           args,
@@ -570,18 +660,18 @@ async function main(): Promise<void> {
         allowPositionals: true,
         strict: true,
       });
-      if (positionals.length !== 1) throw new Error("A workpad path is required");
+      if (positionals.length !== 1) throw new Error("A workpad reference is required");
       const path = positionals[0]!;
+      if (!path) throw new Error("A workpad reference is required");
       const { task } = values;
+      const current = resolveCurrentContext(db, process.cwd(), values.session);
       if (remove) {
-        const current = task ? null : resolveCurrentContext(db, process.cwd(), values.session);
         const result = removeWorkpadLink(db, current, path, task);
-        console.log(`removed ${result.issue} workpad=${result.ref}`);
+        console.log(`removed workpad=${result.ref} task=${result.issue ?? "none"}`);
         return;
       }
-      const current = resolveCurrentContext(db, process.cwd(), values.session);
       const result = addWorkpadLink(db, current, path, task);
-      console.log(`linked ${result.issue} workpad=${result.ref}`);
+      console.log(`linked workpad=${result.ref} task=${result.issue ?? "none"}`);
       return;
     }
 

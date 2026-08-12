@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import * as v from "valibot";
 import { discoverCheckout } from "../src/git.ts";
 import {
   endSession,
@@ -9,6 +10,7 @@ import {
   registerSessionEvent,
   resolveCurrentContext,
 } from "../src/context.ts";
+import { CountRowSchema, NonEmptyStringSchema } from "../src/validation.ts";
 import { tempDir, testDb } from "./helpers.ts";
 
 let db: Database | null = null;
@@ -30,24 +32,23 @@ describe("session context", () => {
       { session_id: "two", cwd: process.cwd(), source: "resume" },
       env,
     );
-    const firstRow = db
-      .query("SELECT ended_at, end_reason FROM session_runs WHERE id = $id")
-      .get({ id: first.sessionRunId }) as {
-      ended_at: string;
-      end_reason: string;
-    };
+    const firstRow = v.parse(
+      v.object({ ended_at: NonEmptyStringSchema, end_reason: v.literal("superseded") }),
+      db
+        .query("SELECT ended_at, end_reason FROM session_runs WHERE id = $id")
+        .get({ id: first.sessionRunId }),
+    );
     expect(firstRow.ended_at).not.toBeNull();
     expect(firstRow.end_reason).toBe("superseded");
     expect(
-      (
-        db.query("SELECT COUNT(*) AS count FROM session_runs WHERE ended_at IS NULL").get() as {
-          count: number;
-        }
+      v.parse(
+        CountRowSchema,
+        db.query("SELECT COUNT(*) AS count FROM session_runs WHERE ended_at IS NULL").get(),
       ).count,
     ).toBe(1);
     expect(second.sessionRunId).not.toBe(first.sessionRunId);
     expect(
-      (db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get() as { count: number })
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get())
         .count,
     ).toBe(2);
   });
@@ -77,13 +78,13 @@ describe("session context", () => {
     expect(compact1.sessionRunId).toBe(start.sessionRunId);
     expect(compact2.sessionRunId).toBe(start.sessionRunId);
     expect(
-      (db.query("SELECT COUNT(*) AS count FROM session_runs").get() as { count: number }).count,
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM session_runs").get()).count,
     ).toBe(1);
     expect(Bun.file(envFile).text()).resolves.toContain(
       `WR_SESSION_RUN_ID='${start.sessionRunId}'`,
     );
     expect(
-      (db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get() as { count: number })
+      v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM session_run_checkouts").get())
         .count,
     ).toBe(1);
   });
@@ -99,11 +100,12 @@ describe("session context", () => {
     expect(endSession(db, "claude", { session_id: "claude-end", cwd: process.cwd() }, {})).toBe(
       started.sessionRunId,
     );
-    const row = db
-      .query("SELECT end_reason FROM session_runs WHERE id = $id")
-      .get({ id: started.sessionRunId }) as {
-      end_reason: string;
-    };
+    const row = v.parse(
+      v.object({ end_reason: v.literal("session_end") }),
+      db
+        .query("SELECT end_reason FROM session_runs WHERE id = $id")
+        .get({ id: started.sessionRunId }),
+    );
     expect(row.end_reason).toBe("session_end");
   });
 
@@ -133,6 +135,30 @@ describe("session context", () => {
     });
     expect(current.cli).toBe("claude");
     expect(current.externalSessionId).toBe("claude-session");
+  });
+
+  test("prefers a direct session ID over stale inherited session variables", () => {
+    db = testDb();
+    const stale = registerSessionEvent(
+      db,
+      "claude",
+      { session_id: "stale-session", cwd: process.cwd(), source: "startup" },
+      {},
+    );
+    const env = {
+      CODEX_THREAD_ID: "direct-session",
+      WR_CLI_SESSION: "claude:stale-session",
+      WR_SESSION_RUN_ID: stale.sessionRunId!,
+    };
+
+    const current = resolveCurrentContext(db, process.cwd(), undefined, env);
+
+    expect(current.cli).toBe("codex");
+    expect(current.externalSessionId).toBe("direct-session");
+    expect(current.sessionRunId).not.toBe(stale.sessionRunId);
+    expect(() => resolveCurrentContext(db!, process.cwd(), "stale-session", env)).toThrow(
+      "conflicts",
+    );
   });
 
   test("validates hook payloads with Valibot", () => {

@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import * as v from "valibot";
+import { RecordListSchema } from "./validation.ts";
 
 export type ResourceName =
   | "tasks"
@@ -60,7 +62,17 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
     "finishedAt",
     "worktreePath",
   ],
-  links: ["id", "taskId", "linearIssueId", "kind", "ref", "createdAt"],
+  links: [
+    "id",
+    "taskId",
+    "linearIssueId",
+    "checkoutId",
+    "repoRoot",
+    "worktreePath",
+    "kind",
+    "ref",
+    "createdAt",
+  ],
   prs: [
     "id",
     "repo",
@@ -101,7 +113,7 @@ export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
   runs: ["id", "session", "status", "itermSessionId", "lastSeenAt"],
   checkouts: ["repoRoot", "worktreePath", "branch"],
   executions: ["id", "linearIssueId", "session", "status", "worktreePath"],
-  links: ["linearIssueId", "kind", "ref"],
+  links: ["linearIssueId", "kind", "ref", "worktreePath"],
   prs: ["repo", "number", "linearIssueId", "headBranch", "baseBranch", "url"],
   branches: ["repoRoot", "branch", "worktreePath"],
   terminals: ["terminalId", "session", "runId", "status", "pane", "lastSeenAt"],
@@ -145,7 +157,7 @@ const RELATIONSHIPS = `WITH relationships AS (
   LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
   LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
   LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
-  LEFT JOIN task_links tl ON tl.task_id = t.id
+  LEFT JOIN task_links tl ON tl.task_id = t.id AND tl.checkout_id = gc.id
   UNION ALL
   SELECT
     NULL, NULL, NULL, NULL, NULL, NULL,
@@ -162,6 +174,18 @@ const RELATIONSHIPS = `WITH relationships AS (
   JOIN session_runs sr ON sr.cli_session_id = cs.id
   JOIN session_run_checkouts src ON src.session_run_id = sr.id
   JOIN git_checkouts gc ON gc.id = src.checkout_id
+  UNION ALL
+  SELECT
+    t.id, t.linear_issue_id, t.title, t.status, t.created_at, t.updated_at,
+    NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL,
+    gc.id, gc.repo_root, gc.worktree_path, gc.branch, gc.created_at,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    tl.id, tl.kind, tl.ref, tl.created_at
+  FROM task_links tl
+  LEFT JOIN tasks t ON t.id = tl.task_id
+  JOIN git_checkouts gc ON gc.id = tl.checkout_id
 )`;
 
 const FILTERS = `($task IS NULL OR linearIssueId = $task)
@@ -213,8 +237,11 @@ function baseQuery(resource: ResourceName): string {
                ORDER BY e.started_at DESC`;
     case "links":
       return `SELECT tl.id, tl.task_id AS taskId, t.linear_issue_id AS linearIssueId,
-                     tl.kind, tl.ref, tl.created_at AS createdAt
-                FROM task_links tl JOIN tasks t ON t.id = tl.task_id
+                     tl.checkout_id AS checkoutId, gc.repo_root AS repoRoot,
+                     gc.worktree_path AS worktreePath, tl.kind, tl.ref,
+                     tl.created_at AS createdAt
+                FROM task_links tl LEFT JOIN tasks t ON t.id = tl.task_id
+                JOIN git_checkouts gc ON gc.id = tl.checkout_id
                ORDER BY tl.created_at DESC`;
     case "prs":
       return `SELECT pr.id, pr.repo, pr.number, pr.url, pr.head_branch AS headBranch,
@@ -262,8 +289,8 @@ function relatedSelect(resource: ResourceName): string {
               executionStatus AS status, executionStartedAt AS startedAt,
               executionFinishedAt AS finishedAt, worktreePath`;
     case "links":
-      return `linkId AS id, taskId, linearIssueId, linkKind AS kind, linkRef AS ref,
-              linkCreatedAt AS createdAt`;
+      return `linkId AS id, taskId, linearIssueId, checkoutId, repoRoot, worktreePath,
+              linkKind AS kind, linkRef AS ref, linkCreatedAt AS createdAt`;
     case "prs":
       return `prId AS id, prRepo AS repo, prNumber AS number, prUrl AS url,
               headBranch, baseBranch, parentPrId, parentNumber, prCreatedAt AS createdAt,
@@ -278,9 +305,11 @@ function relatedSelect(resource: ResourceName): string {
 }
 
 function queryRepositories(db: Database, filters: ResourceFilters): Array<Record<string, unknown>> {
-  return db
-    .query(
-      `SELECT gc.repo_root AS repoRoot,
+  return v.parse(
+    RecordListSchema,
+    db
+      .query(
+        `SELECT gc.repo_root AS repoRoot,
               CASE WHEN COUNT(DISTINCT CASE WHEN e.status = 'active' THEN e.id END) > 0
                    THEN 'active' ELSE 'inactive' END AS status,
               COUNT(DISTINCT gc.worktree_path) AS worktreeCount,
@@ -296,8 +325,9 @@ function queryRepositories(db: Database, filters: ResourceFilters): Array<Record
          LEFT JOIN cli_sessions run_cs ON run_cs.id = sr.cli_session_id
          LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
          LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
-         LEFT JOIN task_links tl ON tl.task_id = t.id
-        WHERE ($task IS NULL OR t.linear_issue_id = $task)
+         LEFT JOIN task_links tl ON tl.checkout_id = gc.id
+         LEFT JOIN tasks link_t ON link_t.id = tl.task_id
+        WHERE ($task IS NULL OR t.linear_issue_id = $task OR link_t.linear_issue_id = $task)
           AND ($session IS NULL OR cs.external_session_id = $session OR run_cs.external_session_id = $session)
           AND ($run IS NULL OR e.session_run_id = $run OR sr.id = $run)
           AND ($checkout IS NULL OR gc.id = $checkout)
@@ -310,20 +340,21 @@ function queryRepositories(db: Database, filters: ResourceFilters): Array<Record
           AND ($pullRequest IS NULL OR pr.number = $pullRequest)
         GROUP BY gc.repo_root
         ORDER BY updatedAt DESC, repoRoot`,
-    )
-    .all({
-      task: filters.task ?? null,
-      session: filters.session ?? null,
-      run: filters.run ?? null,
-      checkout: filters.checkout ?? null,
-      execution: filters.execution ?? null,
-      link: filters.link ?? null,
-      terminal: filters.terminal ?? null,
-      repoRoot: filters.repoRoot ?? null,
-      worktreePath: filters.worktreePath ?? null,
-      branch: filters.branch ?? null,
-      pullRequest: filters.pullRequest ?? null,
-    }) as Array<Record<string, unknown>>;
+      )
+      .all({
+        task: filters.task ?? null,
+        session: filters.session ?? null,
+        run: filters.run ?? null,
+        checkout: filters.checkout ?? null,
+        execution: filters.execution ?? null,
+        link: filters.link ?? null,
+        terminal: filters.terminal ?? null,
+        repoRoot: filters.repoRoot ?? null,
+        worktreePath: filters.worktreePath ?? null,
+        branch: filters.branch ?? null,
+        pullRequest: filters.pullRequest ?? null,
+      }),
+  );
 }
 
 function hasRelationshipFilter(filters: ResourceFilters): boolean {
@@ -353,27 +384,30 @@ export function queryResource(
   } else if (hasRelationshipFilter(filters)) {
     const select = relatedSelect(resource);
     const nonNull = select.split(",")[0]!.trim().split(" ")[0]!;
-    rows = db
-      .query(
-        `${RELATIONSHIPS}
-         SELECT DISTINCT ${select} FROM relationships
-          WHERE ${FILTERS} AND ${nonNull} IS NOT NULL`,
-      )
-      .all({
-        task: filters.task ?? null,
-        session: filters.session ?? null,
-        run: filters.run ?? null,
-        checkout: filters.checkout ?? null,
-        execution: filters.execution ?? null,
-        link: filters.link ?? null,
-        terminal: filters.terminal ?? null,
-        repoRoot: filters.repoRoot ?? null,
-        worktreePath: filters.worktreePath ?? null,
-        branch: filters.branch ?? null,
-        pullRequest: filters.pullRequest ?? null,
-      }) as Array<Record<string, unknown>>;
+    rows = v.parse(
+      RecordListSchema,
+      db
+        .query(
+          `${RELATIONSHIPS}
+           SELECT DISTINCT ${select} FROM relationships
+            WHERE ${FILTERS} AND ${nonNull} IS NOT NULL`,
+        )
+        .all({
+          task: filters.task ?? null,
+          session: filters.session ?? null,
+          run: filters.run ?? null,
+          checkout: filters.checkout ?? null,
+          execution: filters.execution ?? null,
+          link: filters.link ?? null,
+          terminal: filters.terminal ?? null,
+          repoRoot: filters.repoRoot ?? null,
+          worktreePath: filters.worktreePath ?? null,
+          branch: filters.branch ?? null,
+          pullRequest: filters.pullRequest ?? null,
+        }),
+    );
   } else {
-    rows = db.query(baseQuery(resource)).all() as Array<Record<string, unknown>>;
+    rows = v.parse(RecordListSchema, db.query(baseQuery(resource)).all());
   }
 
   if (filters.status) rows = rows.filter((row) => row.status === filters.status);
