@@ -29,6 +29,12 @@ bun run compile
 install -m 755 dist/wr "$HOME/.local/bin/wr"
 ```
 
+Tagged releases publish macOS binaries and update `mkusaka/homebrew-tap` automatically. Install a release with:
+
+```bash
+brew install mkusaka/tap/wr
+```
+
 The database is created at `$XDG_DATA_HOME/wr/wr.db`. When `XDG_DATA_HOME` is unset, `wr` uses `$HOME/.local/share/wr/wr.db`.
 
 ## Repository opt-in
