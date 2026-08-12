@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release wr"
+  short_description: "Publish wr and verify Homebrew delivery"
+  default_prompt: "Use $release-wr to prepare and publish a wr release end to end."
