@@ -1,6 +1,6 @@
 ---
 name: ops-wr
-description: Operate the wr relationship-ledger CLI to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use when starting or completing tracked work, attaching, removing, listing, or synchronizing PRs, identifying tasks by repository, listing active session runs, focusing an iTerm2 pane, adopting sessions that were already running before wr hooks were installed, or diagnosing ambiguous task context.
+description: Operate the wr relationship-ledger CLI to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use for routine task tracking, attaching or removing artifacts, listing related records, synchronizing explicitly, focusing an iTerm2 pane, or diagnosing ambiguous task context.
 ---
 
 # Operate wr
@@ -46,36 +46,11 @@ wr runs focus <session-id>
 
 Resource commands use the current repository inside Git and the global ledger outside Git. Use `--global` explicitly when a repository-local command needs global results. Filter tasks with `wr tasks --status active`.
 
-Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, and `wr terminals` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the Codex thread ID or Claude session ID directly to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--json FIELD,...` for structured output and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
+Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, and `wr terminals` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the raw Codex thread ID or Claude session ID to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--json FIELD,...` for structured output and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
 
-`wr sessions` refers to stable CLI sessions. `wr runs` refers to individual SessionRuns and can focus a related iTerm2 pane. Claude sessions use `claude:<session-id>` and Codex sessions use `codex:<thread-id>`.
+`wr sessions` refers to stable CLI sessions. `wr runs` refers to individual SessionRuns and can focus a related iTerm2 pane. The human-readable session field uses `claude:<session-id>` or `codex:<thread-id>`.
 
-If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value.
-
-## Adopt a session opened before wr
-
-Run adoption from inside each session being registered. Do not register another live agent's session from a coordinator session.
-
-First confirm that the repository is already enabled. If it is not enabled, report that condition instead of changing the configuration. Then register the session and its current checkout:
-
-```bash
-# Codex resolves CODEX_THREAD_ID automatically.
-wr show
-
-# Claude Code exposes the current ID to Bash tool subprocesses.
-wr show --session "${CLAUDE_CODE_SESSION_ID}"
-```
-
-If the task is known, attach it in the same session instead of guessing from other ledger rows:
-
-```bash
-wr task start MAL-123 --worktree .
-wr task start MAL-123 --worktree . --session "${CLAUDE_CODE_SESSION_ID}"
-```
-
-Finish with `wr show`, passing the same explicit Claude session when needed. This first authoritative command creates the missing CLI session, SessionRun, and checkout rows. If `CLAUDE_CODE_SESSION_ID` is empty, or session discovery conflicts with `--session`, stop and report the condition. Do not inspect transcript storage or force an identity.
-
-When assigning this migration to an existing agent, provide the known task ID or state that it is unknown. Ask the agent to use this skill, register only its own current session, attach the task only when supplied, verify with `wr show`, and make no source-code changes.
+If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value. Use `$adopt-wr-session` for full reconstruction of an already-running session.
 
 ## Track task work
 

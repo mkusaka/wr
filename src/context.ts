@@ -186,6 +186,11 @@ export function resolveCurrentContext(
       cli: "codex",
       externalSessionId: env.CODEX_THREAD_ID,
     });
+  } else if (env.CLAUDE_CODE_SESSION_ID) {
+    automatic = v.parse(SessionIdentitySchema, {
+      cli: "claude",
+      externalSessionId: env.CLAUDE_CODE_SESSION_ID,
+    });
   } else if (env.TERM_SESSION_ID) {
     const row = db
       .query(

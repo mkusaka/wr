@@ -113,6 +113,15 @@ describe("session context", () => {
     ).toThrow("conflicts");
   });
 
+  test("self-registers a Claude session from its environment ID", () => {
+    db = testDb();
+    const current = resolveCurrentContext(db, process.cwd(), "claude-session", {
+      CLAUDE_CODE_SESSION_ID: "claude-session",
+    });
+    expect(current.cli).toBe("claude");
+    expect(current.externalSessionId).toBe("claude-session");
+  });
+
   test("validates hook payloads with Valibot", () => {
     expect(parseHookPayload('{"session_id":"id","cwd":"/tmp","source":"startup"}')).toEqual({
       session_id: "id",

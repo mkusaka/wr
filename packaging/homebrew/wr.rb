@@ -27,12 +27,15 @@ class Wr < Formula
 
       Install from the packaged skill files with npx skills:
         npx -y skills add "#{skill_path}" --skill ops-wr -y --copy
+        npx -y skills add "#{skill_path}" --skill adopt-wr-session -y --copy
 
       Install from the repository with npx skills:
         npx -y skills add https://github.com/mkusaka/wr --skill ops-wr -y
+        npx -y skills add https://github.com/mkusaka/wr --skill adopt-wr-session -y
 
       Install from GitHub CLI v2.90.0+:
         gh skill install mkusaka/wr ops-wr
+        gh skill install mkusaka/wr adopt-wr-session
 
       Add `--agent <host>` if you want to target a specific agent host.
     EOS

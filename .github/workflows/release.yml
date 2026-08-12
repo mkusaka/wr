@@ -119,7 +119,7 @@ jobs:
           ./wr --help >/dev/null
           mkdir -p release-root/skills
           cp wr release-root/wr
-          cp -R skills/operate-wr release-root/skills/
+          cp -R skills/ops-wr skills/adopt-wr-session release-root/skills/
 
           ASSET_NAME="wr-${VERSION}-${ARCHIVE_SUFFIX}.tar.gz"
           tar -C release-root -czf "$ASSET_NAME" .

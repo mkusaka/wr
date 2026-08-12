@@ -1,0 +1,4 @@
+interface:
+  display_name: "Adopt wr session"
+  short_description: "Reconstruct a remembered wr session ledger"
+  default_prompt: "Use $adopt-wr-session to register all remembered relationships for an already-running session."
