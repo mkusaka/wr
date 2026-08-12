@@ -6,7 +6,9 @@
 
 - Bun
 - Git
-- `gh` for pull request registration
+- `gh` for pull request registration and synchronization
+- Optional: `jq` for `--jq` output filtering
+- Optional: `it2` for iTerm2 pane liveness and focus
 - Claude Code or Codex
 
 ## Development
@@ -70,14 +72,42 @@ wr task done MAL-123
 
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-123 --parent 123
+wr pr remove 123 --task MAL-123
+wr sync
 wr link workpad ./workpad.md --task MAL-123
 
 wr show
 wr show --task MAL-123
 wr show --worktree .
-wr sessions
+wr tasks
+wr tasks --global --status active
+wr tasks --session <session-id>
+wr sessions --task MAL-123
+wr runs --pr 123
+wr checkouts --session <session-id>
+wr executions --branch feature/foo
+wr links --pr 123
+wr prs
+wr branches --task MAL-123
+wr terminals --task MAL-123
+wr runs focus <session-id>
+wr terminals focus <iterm-session-id>
+
+wr tasks --json linearIssueId,status,title
+wr tasks --json linearIssueId,status --jq '.[] | select(.status == "active")'
+wr tasks --json
 ```
 
-Commands that omit a task infer it only when the current checkout has exactly one active task. Use `--session codex:<id>` or `--session claude:<id>` when the current session cannot be discovered automatically.
+Commands that omit a task infer it only when the current checkout has exactly one active task. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
 
 `wr task done` closes executions for the selected task only. Executions in the current CLI session become `finished`; executions in other sessions become `abandoned`. Executions for other tasks in the same session remain untouched.
+
+Resource commands are scoped to the current repository when run inside a Git checkout and use the global ledger otherwise. Pass `--global` to override repository scoping or `--repo PATH` to select a repository explicitly. All resource commands accept relationship filters: `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--worktree`, `--branch`, and `--pr`. `--session` accepts a Codex thread ID or Claude session ID without a CLI prefix. If the same external ID exists for both clients, the command reports ambiguity. `--task` accepts the Linear issue identifier stored in the ledger. Tasks are ordered by `updated_at` descending.
+
+Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` to filter that JSON with the installed `jq` command. Pass `--json` without a value to list the available fields for a resource.
+
+`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and links it only when that checkout has exactly one active task. GitHub lookup failures and ambiguous tasks stop the command before any database writes.
+
+`wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Executions, so no GitHub or Linear network lookup is performed.
+
+When `it2` is available, `wr runs` marks each pane as `live` or `closed`. Use `wr runs focus CLI:ID` or `wr runs focus RUN_ID` to focus its active iTerm2 pane. Without `it2`, pane status is `unknown`.

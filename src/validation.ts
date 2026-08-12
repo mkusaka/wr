@@ -1,6 +1,6 @@
 import * as v from "valibot";
 
-const NonEmptyStringSchema = v.pipe(v.string(), v.nonEmpty());
+export const NonEmptyStringSchema = v.pipe(v.string(), v.nonEmpty());
 
 export const CliSchema = v.picklist(["codex", "claude"]);
 
@@ -29,6 +29,28 @@ export const PullRequestSchema = v.object({
   headRefName: NonEmptyStringSchema,
   baseRefName: NonEmptyStringSchema,
 });
+
+export const PullRequestListSchema = v.array(PullRequestSchema);
+
+export const TaskStatusSchema = v.picklist(["open", "active", "done", "cancelled"]);
+
+export const ExecutionStatusSchema = v.picklist(["active", "finished", "abandoned"]);
+
+export const RunStatusSchema = v.picklist(["active", "ended"]);
+
+export const ResourceNameSchema = v.picklist([
+  "tasks",
+  "sessions",
+  "runs",
+  "checkouts",
+  "executions",
+  "links",
+  "prs",
+  "branches",
+  "terminals",
+]);
+
+export const ITermSessionListSchema = v.array(v.object({ id: NonEmptyStringSchema }));
 
 export const PositiveIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 

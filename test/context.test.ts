@@ -107,7 +107,7 @@ describe("session context", () => {
     expect(current.externalSessionId).toBe("self-register");
     expect(current.sessionRunId).toBeTruthy();
     expect(() =>
-      resolveCurrentContext(db!, process.cwd(), "claude:other", {
+      resolveCurrentContext(db!, process.cwd(), "other", {
         CODEX_THREAD_ID: "self-register",
       }),
     ).toThrow("conflicts");

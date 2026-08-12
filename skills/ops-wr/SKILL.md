@@ -1,5 +1,5 @@
 ---
-name: operate-wr
+name: ops-wr
 description: Operate the wr relationship-ledger CLI to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use when starting or completing tracked work, attaching, removing, listing, or synchronizing PRs, identifying tasks by repository, listing active session runs, focusing an iTerm2 pane, adopting sessions that were already running before wr hooks were installed, or diagnosing ambiguous task context.
 ---
 
@@ -36,21 +36,21 @@ wr prs
 wr runs
 wr runs --pr 123
 wr sessions --task MAL-123
-wr checkouts --session codex:<thread-id>
+wr checkouts --session <session-id>
 wr executions --branch feature/foo
 wr links --pr 123
 wr branches --task MAL-123
 wr terminals --task MAL-123
-wr runs focus codex:<thread-id>
+wr runs focus <session-id>
 ```
 
 Resource commands use the current repository inside Git and the global ledger outside Git. Use `--global` explicitly when a repository-local command needs global results. Filter tasks with `wr tasks --status active`.
 
-Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, and `wr terminals` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. `--task` accepts the Linear issue identifier. Use `--json FIELD,...` for structured output and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
+Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, and `wr terminals` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the Codex thread ID or Claude session ID directly to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--json FIELD,...` for structured output and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
 
 `wr sessions` refers to stable CLI sessions. `wr runs` refers to individual SessionRuns and can focus a related iTerm2 pane. Claude sessions use `claude:<session-id>` and Codex sessions use `codex:<thread-id>`.
 
-If session discovery fails, pass `--session codex:<thread-id>` or `--session claude:<session-id>`. Do not override a discovered session with a conflicting explicit value.
+If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value.
 
 ## Adopt a session opened before wr
 
@@ -63,14 +63,14 @@ First confirm that the repository is already enabled. If it is not enabled, repo
 wr show
 
 # Claude Code exposes the current ID to Bash tool subprocesses.
-wr show --session "claude:${CLAUDE_CODE_SESSION_ID}"
+wr show --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
 If the task is known, attach it in the same session instead of guessing from other ledger rows:
 
 ```bash
 wr task start MAL-123 --worktree .
-wr task start MAL-123 --worktree . --session "claude:${CLAUDE_CODE_SESSION_ID}"
+wr task start MAL-123 --worktree . --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
 Finish with `wr show`, passing the same explicit Claude session when needed. This first authoritative command creates the missing CLI session, SessionRun, and checkout rows. If `CLAUDE_CODE_SESSION_ID` is empty, or session discovery conflicts with `--session`, stop and report the condition. Do not inspect transcript storage or force an identity.

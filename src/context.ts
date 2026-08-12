@@ -19,7 +19,7 @@ export type CurrentContext = SessionIdentity & {
   checkout: Checkout | null;
 };
 
-function parseIdentity(value: string): SessionIdentity {
+function parseSessionIdentity(value: string): SessionIdentity {
   const colon = value.indexOf(":");
   try {
     return v.parse(SessionIdentitySchema, {
@@ -29,10 +29,6 @@ function parseIdentity(value: string): SessionIdentity {
   } catch {
     throw new Error(`Invalid session: ${value}`);
   }
-}
-
-function sameIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
-  return left.cli === right.cli && left.externalSessionId === right.externalSessionId;
 }
 
 function ensureCliSession(db: Database, identity: SessionIdentity): string {
@@ -183,7 +179,7 @@ export function resolveCurrentContext(
   let requestedRunId: string | null = null;
 
   if (env.WR_CLI_SESSION) {
-    automatic = parseIdentity(env.WR_CLI_SESSION);
+    automatic = parseSessionIdentity(env.WR_CLI_SESSION);
     requestedRunId = env.WR_SESSION_RUN_ID || null;
   } else if (env.CODEX_THREAD_ID) {
     automatic = v.parse(SessionIdentitySchema, {
@@ -203,13 +199,19 @@ export function resolveCurrentContext(
     if (row) automatic = { cli: row.cli, externalSessionId: row.external_session_id };
   }
 
-  const explicit = explicitSession ? parseIdentity(explicitSession) : null;
-  if (automatic && explicit && !sameIdentity(automatic, explicit)) {
+  if (automatic && explicitSession && automatic.externalSessionId !== explicitSession) {
     throw new Error("The discovered session conflicts with --session");
   }
-  const identity = automatic ?? explicit;
-  if (!identity)
-    throw new Error("Could not resolve a session; pass --session codex:<id>|claude:<id>");
+  let identity = automatic;
+  if (!identity && explicitSession) {
+    const rows = db
+      .query("SELECT cli, external_session_id FROM cli_sessions WHERE external_session_id = $id")
+      .all({ id: explicitSession }) as Array<{ cli: Cli; external_session_id: string }>;
+    if (rows.length > 1) throw new Error(`Session ID is ambiguous: ${explicitSession}`);
+    if (rows.length === 1)
+      identity = { cli: rows[0]!.cli, externalSessionId: rows[0]!.external_session_id };
+  }
+  if (!identity) throw new Error("Could not resolve a session; pass an existing --session ID");
 
   let cliSessionId = "";
   let sessionRunId = "";
