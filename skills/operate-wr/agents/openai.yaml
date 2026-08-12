@@ -1,4 +1,4 @@
 interface:
   display_name: "Operate wr"
-  short_description: "Track tasks, sessions, worktrees, PRs, and workpads"
+  short_description: "Track tasks, runs, worktrees, PRs, and workpads"
   default_prompt: "Use $operate-wr to register and inspect the current task context."
