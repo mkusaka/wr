@@ -16,6 +16,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@optique/core": "^1.2.1",
+    "@optique/run": "^1.2.1",
+    "@optique/valibot": "^1.2.1",
     "ink": "^7.1.1",
     "react": "^19.2.8",
     "react-devtools-core": "^7.0.1",

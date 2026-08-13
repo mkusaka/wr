@@ -31,34 +31,43 @@ Run `wr show` to inspect the current session and checkout. Use an explicit rever
 ```bash
 wr show --task MAL-123
 wr show --worktree .
+wr show --json
 wr doctor
-wr tasks
-wr prs
-wr repos
-wr runs
-wr runs --pr 123
-wr sessions --task MAL-123
-wr checkouts --session <session-id>
-wr executions --branch feature/foo
-wr links --pr 123
-wr branches --task MAL-123
-wr terminals --task MAL-123
-wr runs focus <session-id>
+wr task list
+wr pr list
+wr repo list
+wr run list
+wr run list --pr 123
+wr session list --task MAL-123
+wr checkout list --session <session-id>
+wr execution list --branch feature/foo
+wr link list --pr 123
+wr branch list --task MAL-123
+wr terminal list --task MAL-123
+wr run focus <session-id>
 ```
 
-Use `wr --help` for command discovery. There is no `wr help` subcommand. The
-`link` command currently supports only workpads; it does not store arbitrary
+`wr show --json` は、関連 task と execution、PR、link をまとめた JSON を返す。
+resource コマンドの `--json FIELD,...` や `--jq FILTER` とは異なり、フィールド指定は受け取らない。
+
+Worktree の作成が必要な場合は `wt add` を使う。ヘルプは `wt help` で確認し、
+対応していない `wt add --help` は使わない。
+
+Use `wr --help`, `wr help RESOURCE`, or `wr RESOURCE ACTION --help` for command discovery. The
+`link` resource currently supports only workpads; it does not store arbitrary
 URLs such as Confluence links:
 
 ```bash
-wr link workpad ./workpad.md --task MAL-123
+wr link workpad add ./workpad.md --task MAL-123
 ```
 
-Resource commands use the current repository inside Git and the global ledger outside Git. Use `--global` explicitly when a repository-local command needs global results. Filter tasks with `wr tasks --status active`.
+Resource list commands use the current repository inside Git and the global ledger outside Git. Use `--global` explicitly when a repository-local command needs global results. Filter tasks with `wr task list --status active`.
 
-Use `wr tasks`, `wr sessions`, `wr runs`, `wr checkouts`, `wr executions`, `wr links`, `wr prs`, `wr branches`, `wr terminals`, and `wr repos` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the raw Codex thread ID or Claude session ID to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--limit NUMBER` to bound ordered results, `--json FIELD,...` for structured output, and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
+Use `wr task list`, `wr session list`, `wr run list`, `wr checkout list`, `wr execution list`, `wr link list`, `wr pr list`, `wr branch list`, `wr terminal list`, and `wr repo list` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the raw Codex thread ID or Claude session ID to `--session`, without a CLI prefix. `--task` accepts the Linear issue identifier. Use `--limit NUMBER` to bound ordered results, `--json FIELD,...` for structured output, and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
 
-`wr sessions` refers to stable CLI sessions. `wr runs` refers to individual SessionRuns and can focus a related iTerm2 pane. The human-readable session field uses `claude:<session-id>` or `codex:<thread-id>`.
+`wr session list` refers to stable CLI sessions. `wr run list` refers to individual SessionRuns and `wr run focus` can focus a related iTerm2 pane. The human-readable session field uses `claude:<session-id>` or `codex:<thread-id>`.
+
+The previous plural resource commands, `wr link workpad REF`, and `wr link remove workpad REF` are temporary compatibility paths. Do not use them in new instructions; migrate existing callers because they will be removed later.
 
 If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value. Use `$adopt-wr-session` for full reconstruction of an already-running session.
 
@@ -104,11 +113,11 @@ wr sync
 Register a workpad:
 
 ```bash
-wr link workpad ./workpad.md
-wr link workpad MOQ-1291
-wr link workpad ./workpad.md --task MAL-123
-wr link remove workpad MOQ-1291
-wr link remove workpad ./workpad.md --task MAL-123
+wr link workpad add ./workpad.md
+wr link workpad add MOQ-1291
+wr link workpad add ./workpad.md --task MAL-123
+wr link workpad remove MOQ-1291
+wr link workpad remove ./workpad.md --task MAL-123
 ```
 
 Workpad references may be existing paths or identifiers such as task IDs. Existing paths are normalized. Workpads are always associated with the current checkout and create a task relationship only when `--task` is provided.

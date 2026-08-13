@@ -1,28 +1,17 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
-import { parseArgs } from "node:util";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { object, or } from "@optique/core/constructs";
+import { message } from "@optique/core/message";
+import { optional, withDefault } from "@optique/core/modifiers";
+import { argument, command, constant, option } from "@optique/core/primitives";
+import { string as optiqueString } from "@optique/core/valueparser";
+import { run } from "@optique/run";
+import { valibot } from "@optique/valibot";
 import { render } from "ink";
 import { createElement } from "react";
 import * as v from "valibot";
-import {
-  disableRepository,
-  enableRepository,
-  isRepositoryEnabled,
-  readConfig,
-  requireEnabledRepository,
-} from "./config.ts";
-import { defaultDbPath, openDb } from "./db.ts";
-import { discoverCheckout } from "./git.ts";
-import {
-  endSession,
-  findCurrentSession,
-  parseHookPayload,
-  registerSessionEvent,
-  resolveCurrentContext,
-  type Cli,
-} from "./context.ts";
 import {
   addPullRequest,
   addTask,
@@ -36,6 +25,23 @@ import {
   startTask,
   syncPullRequests,
 } from "./commands.ts";
+import {
+  disableRepository,
+  enableRepository,
+  isRepositoryEnabled,
+  readConfig,
+  requireEnabledRepository,
+} from "./config.ts";
+import {
+  endSession,
+  findCurrentSession,
+  parseHookPayload,
+  registerSessionEvent,
+  resolveCurrentContext,
+  type Cli,
+} from "./context.ts";
+import { defaultDbPath, openDb } from "./db.ts";
+import { discoverCheckout } from "./git.ts";
 import { renderResource } from "./output.ts";
 import {
   queryResource,
@@ -53,123 +59,45 @@ import {
   PositiveIntegerSchema,
   RecordListSchema,
   RepositoryStatusSchema,
-  ResourceNameSchema,
   RunStatusSchema,
   TaskStatusSchema,
 } from "./validation.ts";
 
-const RESOURCE_FILTER_HELP = `Resource filters:
-  --task ISSUE          Linear issue identifier
-  --session ID          Codex thread ID or Claude session ID
-  --run ID              Session run ID
-  --checkout ID         Git checkout ID
-  --execution ID        Execution ID
-  --link ID             Task link ID
-  --terminal ID         iTerm2 session ID
-  --repo PATH           Repository containing related records
-  --worktree PATH       Worktree containing related records
-  --branch BRANCH       Branch containing related records
-  --pr NUMBER           Pull request containing related records
-  --status STATUS       Status supported by the selected resource
-  --kind KIND           Link kind (links only)
-  --limit NUMBER        Maximum number of records
-  --global              Do not infer repository scope from cwd
-  --json FIELDS         Output selected comma-separated fields; omit value to list fields
-  --jq, -q EXPR         Filter JSON output with jq`;
+type ResourceOptions = {
+  task?: string;
+  session?: string;
+  run?: string;
+  checkout?: string;
+  execution?: string;
+  link?: string;
+  terminal?: string;
+  repo?: string;
+  worktree?: string;
+  branch?: string;
+  pr?: number;
+  status?: string;
+  kind?: string;
+  global?: boolean;
+  json?: string | boolean;
+  jq?: string;
+  limit?: number;
+};
 
-const HELP = `wr - relationship ledger for tasks and CLI sessions
+const PositiveIntegerArgumentSchema = v.pipe(
+  v.string(),
+  v.transform((value) => Number(value)),
+  PositiveIntegerSchema,
+);
 
-Usage:
-  wr internal session-event --cli codex|claude
-  wr internal session-end --cli codex|claude
-  wr config enable [PATH]
-  wr config disable [PATH]
-  wr config list
-  wr task add ISSUE [--title TITLE]
-  wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
-  wr task done [ISSUE] [--session ID]
-  wr task cancel [ISSUE] [--session ID]
-  wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
-  wr pr remove NUMBER --task ISSUE
-  wr link workpad REF [--task ISSUE] [--session ID]
-  wr link remove workpad REF [--task ISSUE] [--session ID]
-  wr show [--task ISSUE | --worktree PATH] [--session ID]
-  wr sync [--session ID]
-  wr doctor
-  wr ui
-  wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals|repos [FILTERS]
-  wr runs focus SESSION_ID|RUN_ID
-  wr terminals focus TERMINAL_ID
+const textValue = valibot(NonEmptyStringSchema, { placeholder: "VALUE" });
+const positiveIntegerValue = valibot(PositiveIntegerArgumentSchema, { placeholder: 1 });
 
-${RESOURCE_FILTER_HELP}`;
-
-const CONFIG_HELP = `Usage:
-  wr config enable [PATH]
-  wr config disable [PATH]
-  wr config list`;
-
-const TASK_HELP = `Usage:
-  wr task add ISSUE [--title TITLE]
-  wr task start ISSUE [--title TITLE] [--worktree PATH] [--session ID]
-  wr task done [ISSUE] [--session ID]
-  wr task cancel [ISSUE] [--session ID]`;
-
-const PR_HELP = `Usage:
-  wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
-  wr pr remove NUMBER --task ISSUE`;
-
-const LINK_HELP = `Usage:
-  wr link workpad REF [--task ISSUE] [--session ID]
-  wr link remove workpad REF [--task ISSUE] [--session ID]`;
-
-const SHOW_HELP = `Usage:
-  wr show [--task ISSUE | --worktree PATH] [--session ID]`;
-
-const SYNC_HELP = `Usage:
-  wr sync [--session ID]`;
-
-const DOCTOR_HELP = `Usage:
-  wr doctor`;
-
-const UI_HELP = `Usage:
-  wr ui`;
-
-function helpRequested(args: string[]): boolean {
-  return args.includes("--help") || args.includes("-h");
-}
-
-function resourceHelp(resource: ResourceName): string {
-  const focus =
-    resource === "runs"
-      ? "\n  wr runs focus SESSION_ID|RUN_ID"
-      : resource === "terminals"
-        ? "\n  wr terminals focus TERMINAL_ID"
-        : "";
-  return `Usage:\n  wr ${resource} [FILTERS]${focus}\n\n${RESOURCE_FILTER_HELP}`;
-}
-
-function requireCli(value: string | undefined): Cli {
+function withDb<T>(callback: (db: Database) => T): T {
+  const db = openDb(process.env.WR_DB_PATH);
   try {
-    return v.parse(CliSchema, value);
-  } catch {
-    throw new Error("--cli must be codex or claude");
-  }
-}
-
-function requireInteger(value: string | undefined, label: string): number {
-  try {
-    return v.parse(PositiveIntegerSchema, Number(value));
-  } catch {
-    throw new Error(`${label} must be a positive integer`);
-  }
-}
-
-function optionalString(value: string | undefined, option: string): string | undefined {
-  if (value === undefined) return undefined;
-  try {
-    return v.parse(NonEmptyStringSchema, value);
-  } catch {
-    throw new Error(`${option} must not be empty`);
+    return callback(db);
+  } finally {
+    db.close();
   }
 }
 
@@ -184,19 +112,13 @@ function getLiveTerminalIds(): Set<string> | undefined {
       return null;
     }
   })();
-  if (!result) return undefined;
-  if (result.exitCode !== 0) return undefined;
+  if (!result || result.exitCode !== 0) return undefined;
   try {
     const sessions = v.parse(ITermSessionListSchema, JSON.parse(result.stdout.toString()));
     return new Set(sessions.map((session) => session.id));
   } catch {
     return undefined;
   }
-}
-
-function requireResource(value: string | undefined): ResourceName | null {
-  const result = v.safeParse(ResourceNameSchema, value);
-  return result.success ? result.output : null;
 }
 
 function resourceStatus(resource: ResourceName, value: string | undefined): string | undefined {
@@ -216,47 +138,65 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
   throw new Error(`--status is not supported by ${resource}`);
 }
 
-function hasBareJson(args: string[]): boolean {
-  const index = args.indexOf("--json");
-  return index >= 0 && (args[index + 1] === undefined || args[index + 1]!.startsWith("-"));
-}
-
 function paneStatus(itermSessionId: unknown, live: Set<string> | undefined): string {
   if (live === undefined) return "unknown";
   if (typeof itermSessionId !== "string") return "closed";
   return live.has(itermSessionId.split(":").at(-1)!) ? "live" : "closed";
 }
 
-function runResource(resource: ResourceName, args: string[]): void {
-  if (hasBareJson(args)) {
-    if (args.some((arg) => arg === "--jq" || arg === "-q" || arg.startsWith("--jq=")))
-      throw new Error("--jq requires --json FIELDS");
+function resourceOptions() {
+  return {
+    task: optional(option("--task", textValue, { description: message`Filter by task.` })),
+    session: optional(
+      option("--session", textValue, { description: message`Filter by CLI session.` }),
+    ),
+    run: optional(option("--run", textValue, { description: message`Filter by session run.` })),
+    checkout: optional(
+      option("--checkout", textValue, { description: message`Filter by checkout.` }),
+    ),
+    execution: optional(
+      option("--execution", textValue, { description: message`Filter by execution.` }),
+    ),
+    link: optional(option("--link", textValue, { description: message`Filter by link.` })),
+    terminal: optional(
+      option("--terminal", textValue, { description: message`Filter by terminal.` }),
+    ),
+    repo: optional(option("--repo", textValue, { description: message`Select a repository.` })),
+    worktree: optional(
+      option("--worktree", textValue, { description: message`Filter by worktree.` }),
+    ),
+    branch: optional(option("--branch", textValue, { description: message`Filter by branch.` })),
+    pr: optional(
+      option("--pr", positiveIntegerValue, { description: message`Filter by pull request.` }),
+    ),
+    status: optional(option("--status", textValue, { description: message`Filter by status.` })),
+    kind: optional(option("--kind", textValue, { description: message`Filter links by kind.` })),
+    limit: optional(
+      option("--limit", positiveIntegerValue, {
+        description: message`Limit the number of records.`,
+      }),
+    ),
+    global: option("--global", { description: message`Do not infer repository scope from cwd.` }),
+    json: optional(
+      or(
+        option("--json", optiqueString({ metavar: "FIELDS" }), {
+          description: message`Output selected fields as JSON.`,
+        }),
+        option("--json", { description: message`List available JSON fields.` }),
+      ),
+    ),
+    jq: optional(
+      option("-q", "--jq", textValue, { description: message`Filter JSON output with jq.` }),
+    ),
+  };
+}
+
+function runResource(resource: ResourceName, values: ResourceOptions): void {
+  if (values.json === true) {
+    if (values.jq) throw new Error("--jq requires --json FIELDS");
     console.log(RESOURCE_FIELDS[resource].join("\n"));
     return;
   }
-  const { values } = parseArgs({
-    args,
-    options: {
-      task: { type: "string" },
-      session: { type: "string" },
-      run: { type: "string" },
-      checkout: { type: "string" },
-      execution: { type: "string" },
-      link: { type: "string" },
-      terminal: { type: "string" },
-      repo: { type: "string" },
-      worktree: { type: "string" },
-      branch: { type: "string" },
-      pr: { type: "string" },
-      status: { type: "string" },
-      kind: { type: "string" },
-      global: { type: "boolean" },
-      json: { type: "string" },
-      jq: { type: "string", short: "q" },
-      limit: { type: "string" },
-    },
-    strict: true,
-  });
   if (values.global && values.repo) throw new Error("--global and --repo cannot be used together");
   if (values.kind !== undefined && resource !== "links")
     throw new Error(`--kind is not supported by ${resource}`);
@@ -264,25 +204,24 @@ function runResource(resource: ResourceName, args: string[]): void {
   const worktree = values.worktree ? discoverCheckout(values.worktree, true)! : undefined;
   const repo = values.repo ? discoverCheckout(values.repo, true)! : undefined;
   const filters: ResourceFilters = {
-    task: optionalString(values.task, "--task"),
-    session: optionalString(values.session, "--session"),
-    run: optionalString(values.run, "--run"),
-    checkout: optionalString(values.checkout, "--checkout"),
-    execution: optionalString(values.execution, "--execution"),
-    link: optionalString(values.link, "--link"),
-    terminal: optionalString(values.terminal, "--terminal"),
+    task: values.task,
+    session: values.session,
+    run: values.run,
+    checkout: values.checkout,
+    execution: values.execution,
+    link: values.link,
+    terminal: values.terminal,
     repoRoot: values.global
       ? undefined
       : (repo?.repoRoot ?? worktree?.repoRoot ?? discoverCheckout(process.cwd())?.repoRoot),
     worktreePath: worktree?.worktreePath,
-    branch: optionalString(values.branch, "--branch"),
-    pullRequest: values.pr === undefined ? undefined : requireInteger(values.pr, "PR number"),
+    branch: values.branch,
+    pullRequest: values.pr,
     status: resourceStatus(resource, values.status),
-    kind: optionalString(values.kind, "--kind"),
-    limit: values.limit === undefined ? undefined : requireInteger(values.limit, "--limit"),
+    kind: values.kind,
+    limit: values.limit,
   };
-  const db = openDb(process.env.WR_DB_PATH);
-  try {
+  withDb((db) => {
     if (isRepositoryEnabled(process.cwd()) && findCurrentSession(db)) {
       resolveCurrentContext(db, process.cwd());
     }
@@ -295,10 +234,15 @@ function runResource(resource: ResourceName, args: string[]): void {
       const enabled = new Set(readConfig().repositories);
       rows = rows.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
     }
-    console.log(renderResource(resource, rows, values.json, values.jq));
-  } finally {
-    db.close();
-  }
+    console.log(
+      renderResource(
+        resource,
+        rows,
+        typeof values.json === "string" ? values.json : undefined,
+        values.jq,
+      ),
+    );
+  });
 }
 
 function runDoctor(): void {
@@ -371,339 +315,609 @@ function runDoctor(): void {
   console.log(lines.join("\n"));
 }
 
-function runConfig(args: string[]): void {
-  if (helpRequested(args)) {
-    console.log(CONFIG_HELP);
-    return;
-  }
-  const action = args.shift();
-  const { positionals } = parseArgs({
-    args,
-    options: {},
-    allowPositionals: true,
-    strict: true,
+function focusTerminal(target: string, resolveRun: boolean): void {
+  withDb((db) => {
+    const terminalId = resolveRun ? findRunTerminal(db, target) : target.split(":").at(-1)!;
+    const result = Bun.spawnSync(["it2", "session", "focus", terminalId], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (result.exitCode !== 0)
+      throw new Error(result.stderr.toString().trim() || "Could not focus the iTerm2 pane");
+    console.log(`focused terminal=${terminalId}`);
   });
-  if (action === "list") {
-    if (positionals.length !== 0) throw new Error("config list does not accept a path");
-    const repositories = readConfig().repositories;
-    console.log(repositories.length === 0 ? "No enabled repositories" : repositories.join("\n"));
-    return;
-  }
-  if (action !== "enable" && action !== "disable") {
-    throw new Error(`Unknown config command: ${action ?? ""}`);
-  }
-  if (positionals.length > 1) throw new Error(`config ${action} accepts at most one path`);
-  const path = positionals[0] ?? ".";
-  const result = action === "enable" ? enableRepository(path) : disableRepository(path);
-  const state = result.changed ? `${action}d` : `already ${action}d`;
-  console.log(`${state} ${result.repoRoot}`);
 }
 
-async function runInternal(args: string[]): Promise<void> {
-  const action = args.shift();
-  const { values } = parseArgs({
-    args,
-    options: { cli: { type: "string" } },
-    strict: true,
-  });
-  const cli = requireCli(values.cli);
-  const payload = parseHookPayload(await Bun.stdin.text());
-  if (action !== "session-event" && action !== "session-end") {
-    throw new Error(`Unknown internal command: ${action ?? ""}`);
-  }
-  if (action === "session-event" && !isRepositoryEnabled(payload.cwd)) return;
-  const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
-  if (action === "session-end" && !existsSync(dbPath)) return;
-  const db = openDb(dbPath);
+async function runInternal(
+  action: "session-event" | "session-end",
+  cliValue: string,
+): Promise<void> {
   try {
-    if (action === "session-event") registerSessionEvent(db, cli, payload);
-    else endSession(db, cli, payload);
-  } finally {
-    db.close();
+    const result = v.safeParse(CliSchema, cliValue);
+    if (!result.success) throw new Error("--cli must be codex or claude");
+    const cli: Cli = result.output;
+    const payload = parseHookPayload(await Bun.stdin.text());
+    if (action === "session-event" && !isRepositoryEnabled(payload.cwd)) return;
+    const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
+    if (action === "session-end" && !existsSync(dbPath)) return;
+    const db = openDb(dbPath);
+    try {
+      if (action === "session-event") registerSessionEvent(db, cli, payload);
+      else endSession(db, cli, payload);
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    console.error(`wr hook: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    console.log(HELP);
-    return;
-  }
+const commandParser = or(
+  command(
+    "internal",
+    or(
+      command(
+        "session-event",
+        object({ action: constant("internal-session-event"), cli: option("--cli", textValue) }),
+      ),
+      command(
+        "session-end",
+        object({ action: constant("internal-session-end"), cli: option("--cli", textValue) }),
+      ),
+    ),
+    { hidden: true },
+  ),
+  command(
+    "config",
+    or(
+      command("list", object({ action: constant("config-list") }), {
+        description: message`List enabled repositories.`,
+      }),
+      command(
+        "enable",
+        object({
+          action: constant("config-enable"),
+          path: withDefault(argument(textValue), "."),
+        }),
+        { description: message`Enable a repository.` },
+      ),
+      command(
+        "disable",
+        object({
+          action: constant("config-disable"),
+          path: withDefault(argument(textValue), "."),
+        }),
+        { description: message`Disable a repository.` },
+      ),
+    ),
+    { description: message`Manage repository opt-in.` },
+  ),
+  command(
+    "task",
+    or(
+      command("list", object({ action: constant("task-list"), ...resourceOptions() }), {
+        description: message`List tasks.`,
+      }),
+      command(
+        "add",
+        object({
+          action: constant("task-add"),
+          issue: argument(textValue, { description: message`Task ID.` }),
+          title: optional(option("--title", textValue, { description: message`Task title.` })),
+        }),
+        { description: message`Register an unstarted task.` },
+      ),
+      command(
+        "start",
+        object({
+          action: constant("task-start"),
+          issue: argument(textValue, { description: message`Task ID.` }),
+          title: optional(option("--title", textValue, { description: message`Task title.` })),
+          worktree: optional(
+            option("--worktree", textValue, { description: message`Worktree path.` }),
+          ),
+          session: optional(
+            option("--session", textValue, { description: message`CLI session ID.` }),
+          ),
+        }),
+        { description: message`Start work on a task.` },
+      ),
+      command(
+        "done",
+        object({
+          action: constant("task-done"),
+          issue: optional(argument(textValue, { description: message`Task ID.` })),
+          session: optional(
+            option("--session", textValue, { description: message`CLI session ID.` }),
+          ),
+        }),
+        { description: message`Complete a task.` },
+      ),
+      command(
+        "cancel",
+        object({
+          action: constant("task-cancel"),
+          issue: optional(argument(textValue, { description: message`Task ID.` })),
+          session: optional(
+            option("--session", textValue, { description: message`CLI session ID.` }),
+          ),
+        }),
+        { description: message`Cancel a task.` },
+      ),
+    ),
+    { description: message`Manage tasks.` },
+  ),
+  command(
+    "pr",
+    or(
+      command("list", object({ action: constant("pr-list"), ...resourceOptions() }), {
+        description: message`List pull requests.`,
+      }),
+      command(
+        "add",
+        object({
+          action: constant("pr-add"),
+          number: argument(positiveIntegerValue, { description: message`Pull request number.` }),
+          task: optional(option("--task", textValue, { description: message`Related task.` })),
+          parent: optional(
+            option("--parent", positiveIntegerValue, {
+              description: message`Parent pull request.`,
+            }),
+          ),
+          session: optional(
+            option("--session", textValue, { description: message`CLI session ID.` }),
+          ),
+        }),
+        { description: message`Register a pull request.` },
+      ),
+      command(
+        "remove",
+        object({
+          action: constant("pr-remove"),
+          number: argument(positiveIntegerValue, { description: message`Pull request number.` }),
+          task: option("--task", textValue, { description: message`Related task.` }),
+        }),
+        { description: message`Remove a task relationship from a pull request.` },
+      ),
+    ),
+    { description: message`Manage pull requests.` },
+  ),
+  command(
+    "link",
+    or(
+      command("list", object({ action: constant("link-list"), ...resourceOptions() }), {
+        description: message`List links.`,
+      }),
+      command(
+        "workpad",
+        or(
+          command(
+            "add",
+            object({
+              action: constant("link-workpad-add"),
+              ref: argument(textValue, { description: message`Link reference.` }),
+              task: optional(option("--task", textValue, { description: message`Related task.` })),
+              session: optional(
+                option("--session", textValue, { description: message`CLI session ID.` }),
+              ),
+            }),
+            { description: message`Register a workpad link.` },
+          ),
+          command(
+            "remove",
+            object({
+              action: constant("link-workpad-remove"),
+              ref: argument(textValue, { description: message`Link reference.` }),
+              task: optional(option("--task", textValue, { description: message`Related task.` })),
+              session: optional(
+                option("--session", textValue, { description: message`CLI session ID.` }),
+              ),
+            }),
+            { description: message`Remove a workpad link.` },
+          ),
+          // TODO: Remove after callers migrate from `wr link workpad REF`.
+          object({
+            action: constant("legacy-link-workpad-add"),
+            ref: argument(textValue, { hidden: true }),
+            task: optional(option("--task", textValue, { hidden: true })),
+            session: optional(option("--session", textValue, { hidden: true })),
+          }),
+        ),
+        { description: message`Manage workpad links.` },
+      ),
+      // TODO: Remove after callers migrate from `wr link remove workpad REF`.
+      command(
+        "remove",
+        object({
+          action: constant("legacy-link-remove"),
+          kind: argument(textValue, { hidden: true }),
+          ref: argument(textValue, { hidden: true }),
+          task: optional(option("--task", textValue, { hidden: true })),
+          session: optional(option("--session", textValue, { hidden: true })),
+        }),
+        { hidden: true },
+      ),
+    ),
+    { description: message`Manage task links.` },
+  ),
+  command(
+    "session",
+    command("list", object({ action: constant("session-list"), ...resourceOptions() }), {
+      description: message`List CLI sessions.`,
+    }),
+    { description: message`Manage CLI sessions.` },
+  ),
+  command(
+    "checkout",
+    command("list", object({ action: constant("checkout-list"), ...resourceOptions() }), {
+      description: message`List Git checkouts.`,
+    }),
+    { description: message`Manage Git checkouts.` },
+  ),
+  command(
+    "execution",
+    command("list", object({ action: constant("execution-list"), ...resourceOptions() }), {
+      description: message`List task executions.`,
+    }),
+    { description: message`Manage task executions.` },
+  ),
+  command(
+    "branch",
+    command("list", object({ action: constant("branch-list"), ...resourceOptions() }), {
+      description: message`List Git branches.`,
+    }),
+    { description: message`Manage Git branches.` },
+  ),
+  command(
+    "repo",
+    command("list", object({ action: constant("repo-list"), ...resourceOptions() }), {
+      description: message`List repositories.`,
+    }),
+    { description: message`Manage repositories.` },
+  ),
+  command(
+    "run",
+    or(
+      command("list", object({ action: constant("run-list"), ...resourceOptions() }), {
+        description: message`List session runs.`,
+      }),
+      command(
+        "focus",
+        object({
+          action: constant("run-focus"),
+          target: argument(textValue, { description: message`CLI session or run ID.` }),
+        }),
+        { description: message`Focus the iTerm2 pane for a session run.` },
+      ),
+    ),
+    { description: message`Manage session runs.` },
+  ),
+  command(
+    "terminal",
+    or(
+      command("list", object({ action: constant("terminal-list"), ...resourceOptions() }), {
+        description: message`List terminals.`,
+      }),
+      command(
+        "focus",
+        object({
+          action: constant("terminal-focus"),
+          target: argument(textValue, { description: message`Terminal ID.` }),
+        }),
+        { description: message`Focus an iTerm2 pane.` },
+      ),
+    ),
+    { description: message`Manage iTerm2 terminals.` },
+  ),
+  command(
+    "show",
+    object({
+      action: constant("show"),
+      task: optional(option("--task", textValue, { description: message`Select a task.` })),
+      worktree: optional(
+        option("--worktree", textValue, { description: message`Select a worktree.` }),
+      ),
+      session: optional(option("--session", textValue, { description: message`CLI session ID.` })),
+      json: option("--json", { description: message`Output JSON.` }),
+    }),
+    { description: message`Show relationships for the current context.` },
+  ),
+  command(
+    "sync",
+    object({
+      action: constant("sync"),
+      session: optional(option("--session", textValue, { description: message`CLI session ID.` })),
+    }),
+    { description: message`Synchronize pull-request relationships.` },
+  ),
+  or(
+    command("doctor", object({ action: constant("doctor") }), {
+      description: message`Inspect the local wr installation.`,
+    }),
+    command("ui", object({ action: constant("ui") }), {
+      description: message`Search active focus targets.`,
+    }),
+    // TODO: Remove these plural resource commands after callers migrate to
+    // `wr <singular-resource> list` and singular `run|terminal focus` commands.
+    or(
+      command("tasks", object({ action: constant("legacy-tasks"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command("sessions", object({ action: constant("legacy-sessions"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command("checkouts", object({ action: constant("legacy-checkouts"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command(
+        "executions",
+        object({ action: constant("legacy-executions"), ...resourceOptions() }),
+        {
+          hidden: true,
+        },
+      ),
+      command("links", object({ action: constant("legacy-links"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command("prs", object({ action: constant("legacy-prs"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command("branches", object({ action: constant("legacy-branches"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command("repos", object({ action: constant("legacy-repos"), ...resourceOptions() }), {
+        hidden: true,
+      }),
+      command(
+        "runs",
+        or(
+          command(
+            "focus",
+            object({ action: constant("legacy-runs-focus"), target: argument(textValue) }),
+            { hidden: true },
+          ),
+          object({ action: constant("legacy-runs"), ...resourceOptions() }),
+        ),
+        { hidden: true },
+      ),
+      command(
+        "terminals",
+        or(
+          command(
+            "focus",
+            object({ action: constant("legacy-terminals-focus"), target: argument(textValue) }),
+            { hidden: true },
+          ),
+          object({ action: constant("legacy-terminals"), ...resourceOptions() }),
+        ),
+        { hidden: true },
+      ),
+    ),
+  ),
+);
 
-  const command = args.shift();
-  if (command === "internal") {
-    try {
-      await runInternal(args);
-    } catch (error) {
-      console.error(`wr hook: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    return;
-  }
+const runOptions = {
+  programName: "wr",
+  brief: message`Relationship ledger for tasks and CLI sessions.`,
+  help: { command: true, option: { names: ["-h", "--help"] } },
+  commandList: "top-level",
+} as const;
 
-  if (command === "config") {
-    runConfig(args);
-    return;
-  }
+try {
+  const entrypointIndex = process.argv[1] && resolve(process.argv[1]) === Bun.main ? 2 : 1;
+  const args = process.argv.slice(entrypointIndex);
+  const cli = run(commandParser, {
+    ...runOptions,
+    args: args.length === 0 ? ["--help"] : args,
+  });
 
-  if (command === "doctor") {
-    if (helpRequested(args)) {
-      console.log(DOCTOR_HELP);
-      return;
+  switch (cli.action) {
+    case "internal-session-event":
+      await runInternal("session-event", cli.cli);
+      break;
+    case "internal-session-end":
+      await runInternal("session-end", cli.cli);
+      break;
+    case "config-list": {
+      const repositories = readConfig().repositories;
+      console.log(repositories.length === 0 ? "No enabled repositories" : repositories.join("\n"));
+      break;
     }
-    if (args.length !== 0) throw new Error("doctor does not accept arguments");
-    runDoctor();
-    return;
-  }
-
-  if (command === "ui") {
-    if (helpRequested(args)) {
-      console.log(UI_HELP);
-      return;
+    case "config-enable": {
+      const result = enableRepository(cli.path);
+      console.log(`${result.changed ? "enabled" : "already enabled"} ${result.repoRoot}`);
+      break;
     }
-    if (args.length !== 0) throw new Error("ui does not accept arguments");
-    const db = openDb(process.env.WR_DB_PATH);
-    try {
-      await render(createElement(WrUi, { targets: queryFocusTargets(db) })).waitUntilExit();
-    } finally {
-      db.close();
+    case "config-disable": {
+      const result = disableRepository(cli.path);
+      console.log(`${result.changed ? "disabled" : "already disabled"} ${result.repoRoot}`);
+      break;
     }
-    return;
-  }
-
-  const resource = requireResource(command);
-  if (resource && helpRequested(args)) {
-    console.log(resourceHelp(resource));
-    return;
-  }
-  if (resource && (resource === "runs" || resource === "terminals") && args[0] === "focus") {
-    args.shift();
-    const db = openDb(process.env.WR_DB_PATH);
-    try {
-      const { positionals } = parseArgs({
-        args,
-        options: {},
-        allowPositionals: true,
-        strict: true,
-      });
-      if (positionals.length !== 1)
-        throw new Error(
-          resource === "runs" ? "A CLI session or run ID is required" : "A terminal ID is required",
-        );
-      const terminalId =
-        resource === "runs"
-          ? findRunTerminal(db, positionals[0]!)
-          : positionals[0]!.split(":").at(-1)!;
-      const result = Bun.spawnSync(["it2", "session", "focus", terminalId], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (result.exitCode !== 0)
-        throw new Error(result.stderr.toString().trim() || "Could not focus the iTerm2 pane");
-      console.log(`focused terminal=${terminalId}`);
-    } finally {
-      db.close();
-    }
-    return;
-  }
-
-  if (resource) {
-    runResource(resource, args);
-    return;
-  }
-
-  if (command === "sync") {
-    if (helpRequested(args)) {
-      console.log(SYNC_HELP);
-      return;
-    }
-    requireEnabledRepository(process.cwd());
-    const { values } = parseArgs({
-      args,
-      options: { session: { type: "string" } },
-      strict: true,
-    });
-    const db = openDb(process.env.WR_DB_PATH);
-    try {
-      const current = resolveCurrentContext(db, process.cwd(), values.session);
-      const result = syncPullRequests(db, current);
-      console.log(
-        `synced checkouts=${result.checkouts} prs=${result.pullRequests} linked=${result.linked} skipped=${result.skipped}`,
-      );
-    } finally {
-      db.close();
-    }
-    return;
-  }
-
-  if (command === "show") {
-    if (helpRequested(args)) {
-      console.log(SHOW_HELP);
-      return;
-    }
-    const { values } = parseArgs({
-      args,
-      options: {
-        session: { type: "string" },
-        task: { type: "string" },
-        worktree: { type: "string" },
-      },
-      strict: true,
-    });
-    const { session: explicitSession, task, worktree } = values;
-    if (task && worktree) throw new Error("--task and --worktree cannot be used together");
-    if (!task && !worktree) requireEnabledRepository(process.cwd());
-    const db = openDb(process.env.WR_DB_PATH);
-    try {
-      const current =
-        task || worktree ? null : resolveCurrentContext(db, process.cwd(), explicitSession);
-      console.log(show(db, current, { task, worktree }));
-    } finally {
-      db.close();
-    }
-    return;
-  }
-
-  if (command !== "task" && command !== "pr" && command !== "link") {
-    throw new Error(`Unknown command: ${command ?? ""}`);
-  }
-  if (helpRequested(args)) {
-    console.log(command === "task" ? TASK_HELP : command === "pr" ? PR_HELP : LINK_HELP);
-    return;
-  }
-  requireEnabledRepository(process.cwd());
-  const db = openDb(process.env.WR_DB_PATH);
-  try {
-    if (command === "task") {
-      const action = args.shift();
-      if (action === "add") {
-        const { values, positionals } = parseArgs({
-          args,
-          options: { title: { type: "string" } },
-          allowPositionals: true,
-          strict: true,
-        });
-        if (positionals.length !== 1 || !positionals[0]) throw new Error("A task ID is required");
-        const result = addTask(db, positionals[0], values.title);
+    case "task-list":
+      runResource("tasks", cli);
+      break;
+    case "task-add":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const result = addTask(db, cli.issue, cli.title);
         console.log(`registered ${result.issue} status=${result.status}`);
-        return;
-      }
-      if (action === "start") {
-        const { values, positionals } = parseArgs({
-          args,
-          options: {
-            session: { type: "string" },
-            title: { type: "string" },
-            worktree: { type: "string" },
-          },
-          allowPositionals: true,
-          strict: true,
-        });
-        if (positionals.length !== 1) throw new Error("A task ID is required");
-        const issue = positionals[0]!;
-        if (values.worktree) requireEnabledRepository(values.worktree);
-        const current = resolveCurrentContext(db, process.cwd(), values.session);
-        const { title, worktree } = values;
-        const result = startTask(db, current, issue, { title, worktree });
-        if (result.reopened) console.error(`reopened ${issue} (was done or cancelled)`);
-        console.log(`started ${issue} execution=${result.executionId}`);
-        return;
-      }
-      if (action === "done" || action === "cancel") {
-        const { values, positionals } = parseArgs({
-          args,
-          options: { session: { type: "string" } },
-          allowPositionals: true,
-          strict: true,
-        });
-        if (positionals.length > 1) throw new Error("Only one task ID may be provided");
-        const [issue] = positionals;
-        if (action === "cancel") {
-          const current = issue ? null : resolveCurrentContext(db, process.cwd(), values.session);
-          const result = cancelTask(db, current, issue);
-          console.log(`cancelled ${result.issue} abandoned=${result.abandoned}`);
-          return;
-        }
-        const current = resolveCurrentContext(db, process.cwd(), values.session);
-        const result = doneTask(db, current, issue);
+      });
+      break;
+    case "task-start":
+      requireEnabledRepository(process.cwd());
+      if (cli.worktree) requireEnabledRepository(cli.worktree);
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = startTask(db, current, cli.issue, cli);
+        if (result.reopened) console.error(`reopened ${cli.issue} (was done or cancelled)`);
+        console.log(`started ${cli.issue} execution=${result.executionId}`);
+      });
+      break;
+    case "task-done":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = doneTask(db, current, cli.issue);
         console.log(
           `done ${result.issue} finished=${result.finished} abandoned=${result.abandoned}`,
         );
-        return;
-      }
-      throw new Error(`Unknown task command: ${action ?? ""}`);
-    }
-
-    if (command === "pr") {
-      const action = args.shift();
-      if (action !== "add" && action !== "remove")
-        throw new Error(`Unknown pr command: ${action ?? ""}`);
-      const { values, positionals } = parseArgs({
-        args,
-        options: {
-          parent: { type: "string" },
-          session: { type: "string" },
-          task: { type: "string" },
-        },
-        allowPositionals: true,
-        strict: true,
       });
-      if (positionals.length !== 1) throw new Error("A PR number is required");
-      const number = requireInteger(positionals[0], "PR number");
-      if (action === "remove") {
-        if (values.parent !== undefined) throw new Error("pr remove does not accept --parent");
-        if (values.session !== undefined) throw new Error("pr remove does not accept --session");
-        if (!values.task) throw new Error("pr remove requires --task");
-        const result = removePullRequest(db, number, values.task);
-        console.log(`removed ${result.repo}#${number} task=${result.issue}`);
-        return;
-      }
-      const { parent: parentValue, task } = values;
-      const parent =
-        parentValue === undefined ? undefined : requireInteger(parentValue, "parent PR number");
-      const current = resolveCurrentContext(db, process.cwd(), values.session);
-      const result = addPullRequest(db, current, number, { task, parent });
-      if (result.warning) console.error(`warning: ${result.warning}`);
-      console.log(`added ${result.repo}#${number}`);
-      return;
-    }
-
-    if (command === "link") {
-      const actionOrKind = args.shift();
-      const remove = actionOrKind === "remove";
-      const kind = remove ? args.shift() : actionOrKind;
-      if (kind !== "workpad") throw new Error(`Unknown link kind: ${kind ?? ""}`);
-      const { values, positionals } = parseArgs({
-        args,
-        options: {
-          session: { type: "string" },
-          task: { type: "string" },
-        },
-        allowPositionals: true,
-        strict: true,
+      break;
+    case "task-cancel":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = cli.issue ? null : resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = cancelTask(db, current, cli.issue);
+        console.log(`cancelled ${result.issue} abandoned=${result.abandoned}`);
       });
-      if (positionals.length !== 1) throw new Error("A workpad reference is required");
-      const path = positionals[0]!;
-      if (!path) throw new Error("A workpad reference is required");
-      const { task } = values;
-      const current = resolveCurrentContext(db, process.cwd(), values.session);
-      if (remove) {
-        const result = removeWorkpadLink(db, current, path, task);
+      break;
+    case "pr-list":
+      runResource("prs", cli);
+      break;
+    case "pr-add":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = addPullRequest(db, current, cli.number, {
+          task: cli.task,
+          parent: cli.parent,
+        });
+        if (result.warning) console.error(`warning: ${result.warning}`);
+        console.log(`added ${result.repo}#${cli.number}`);
+      });
+      break;
+    case "pr-remove":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const result = removePullRequest(db, cli.number, cli.task);
+        console.log(`removed ${result.repo}#${cli.number} task=${result.issue}`);
+      });
+      break;
+    case "link-list":
+      runResource("links", cli);
+      break;
+    case "link-workpad-add":
+    case "legacy-link-workpad-add":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = addWorkpadLink(db, current, cli.ref, cli.task);
+        console.log(`linked workpad=${result.ref} task=${result.issue ?? "none"}`);
+      });
+      break;
+    case "link-workpad-remove":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = removeWorkpadLink(db, current, cli.ref, cli.task);
         console.log(`removed workpad=${result.ref} task=${result.issue ?? "none"}`);
-        return;
+      });
+      break;
+    case "legacy-link-remove":
+      if (cli.kind !== "workpad") throw new Error(`Unknown link kind: ${cli.kind}`);
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = removeWorkpadLink(db, current, cli.ref, cli.task);
+        console.log(`removed workpad=${result.ref} task=${result.issue ?? "none"}`);
+      });
+      break;
+    case "session-list":
+      runResource("sessions", cli);
+      break;
+    case "checkout-list":
+      runResource("checkouts", cli);
+      break;
+    case "execution-list":
+      runResource("executions", cli);
+      break;
+    case "branch-list":
+      runResource("branches", cli);
+      break;
+    case "repo-list":
+      runResource("repos", cli);
+      break;
+    case "run-list":
+      runResource("runs", cli);
+      break;
+    case "run-focus":
+      focusTerminal(cli.target, true);
+      break;
+    case "terminal-list":
+      runResource("terminals", cli);
+      break;
+    case "terminal-focus":
+      focusTerminal(cli.target, false);
+      break;
+    case "show":
+      if (cli.task && cli.worktree)
+        throw new Error("--task and --worktree cannot be used together");
+      if (!cli.task && !cli.worktree) requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current =
+          cli.task || cli.worktree ? null : resolveCurrentContext(db, process.cwd(), cli.session);
+        console.log(show(db, current, cli));
+      });
+      break;
+    case "sync":
+      requireEnabledRepository(process.cwd());
+      withDb((db) => {
+        const current = resolveCurrentContext(db, process.cwd(), cli.session);
+        const result = syncPullRequests(db, current);
+        console.log(
+          `synced checkouts=${result.checkouts} prs=${result.pullRequests} linked=${result.linked} skipped=${result.skipped}`,
+        );
+      });
+      break;
+    case "doctor":
+      runDoctor();
+      break;
+    case "ui": {
+      const db = openDb(process.env.WR_DB_PATH);
+      try {
+        await render(createElement(WrUi, { targets: queryFocusTargets(db) })).waitUntilExit();
+      } finally {
+        db.close();
       }
-      const result = addWorkpadLink(db, current, path, task);
-      console.log(`linked workpad=${result.ref} task=${result.issue ?? "none"}`);
-      return;
+      break;
     }
-
-    throw new Error(`Unknown command: ${command ?? ""}`);
-  } finally {
-    db.close();
+    case "legacy-tasks":
+      runResource("tasks", cli);
+      break;
+    case "legacy-sessions":
+      runResource("sessions", cli);
+      break;
+    case "legacy-checkouts":
+      runResource("checkouts", cli);
+      break;
+    case "legacy-executions":
+      runResource("executions", cli);
+      break;
+    case "legacy-links":
+      runResource("links", cli);
+      break;
+    case "legacy-prs":
+      runResource("prs", cli);
+      break;
+    case "legacy-branches":
+      runResource("branches", cli);
+      break;
+    case "legacy-repos":
+      runResource("repos", cli);
+      break;
+    case "legacy-runs":
+      runResource("runs", cli);
+      break;
+    case "legacy-runs-focus":
+      focusTerminal(cli.target, true);
+      break;
+    case "legacy-terminals":
+      runResource("terminals", cli);
+      break;
+    case "legacy-terminals-focus":
+      focusTerminal(cli.target, false);
+      break;
   }
-}
-
-try {
-  await main();
 } catch (error) {
   console.error(`wr: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;

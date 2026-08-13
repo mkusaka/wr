@@ -253,6 +253,16 @@ describe("resource output", () => {
 
 describe("resource commands", () => {
   test("lists fields when --json has no value", () => {
+    const result = Bun.spawnSync(["bun", "src/cli.ts", "session", "list", "--json"], {
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain("externalSessionId\n");
+  });
+
+  test("keeps plural resource commands working temporarily", () => {
     const result = Bun.spawnSync(["bun", "src/cli.ts", "sessions", "--json"], {
       cwd: process.cwd(),
       stdout: "pipe",
@@ -266,7 +276,17 @@ describe("resource commands", () => {
     relatedRecords();
     const path = db!.filename;
     const task = Bun.spawnSync(
-      ["bun", "src/cli.ts", "tasks", "--global", "--task", "MAL-123", "--json", "linearIssueId"],
+      [
+        "bun",
+        "src/cli.ts",
+        "task",
+        "list",
+        "--global",
+        "--task",
+        "MAL-123",
+        "--json",
+        "linearIssueId",
+      ],
       {
         cwd: process.cwd(),
         env: { ...process.env, WR_DB_PATH: path },
@@ -278,7 +298,8 @@ describe("resource commands", () => {
       [
         "bun",
         "src/cli.ts",
-        "sessions",
+        "session",
+        "list",
         "--global",
         "--session",
         "resource-session",
@@ -301,7 +322,17 @@ describe("resource commands", () => {
   test("accepts --limit and reports repository opt-in", () => {
     relatedRecords();
     const result = Bun.spawnSync(
-      ["bun", "src/cli.ts", "repos", "--global", "--limit", "1", "--json", "repoRoot,enabled"],
+      [
+        "bun",
+        "src/cli.ts",
+        "repo",
+        "list",
+        "--global",
+        "--limit",
+        "1",
+        "--json",
+        "repoRoot,enabled",
+      ],
       {
         cwd: process.cwd(),
         env: {
@@ -345,7 +376,17 @@ describe("resource commands", () => {
 
   test("reports a missing jq executable", () => {
     const result = Bun.spawnSync(
-      [process.execPath, "src/cli.ts", "tasks", "--global", "--json", "linearIssueId", "--jq", "."],
+      [
+        process.execPath,
+        "src/cli.ts",
+        "task",
+        "list",
+        "--global",
+        "--json",
+        "linearIssueId",
+        "--jq",
+        ".",
+      ],
       {
         cwd: process.cwd(),
         env: {

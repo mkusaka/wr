@@ -77,7 +77,7 @@ describe("task lifecycle", () => {
       v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM executions").get()).count,
     ).toBe(0);
     const listed = Bun.spawnSync(
-      [process.execPath, "src/cli.ts", "tasks", "--global", "--status", "open"],
+      [process.execPath, "src/cli.ts", "task", "list", "--global", "--status", "open"],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" },
     );
     expect(listed.exitCode, listed.stderr.toString()).toBe(0);
@@ -189,6 +189,15 @@ describe("task lifecycle", () => {
     ).toBe(1);
     expect(show(db, current, {})).toContain(`workpad: ${realpathSync(workpad)}`);
     expect(show(db, null, { task: "TASK-SHOW" })).toContain("Execution active: codex:show-session");
+    expect(JSON.parse(show(db, null, { task: "TASK-SHOW", json: true }))).toEqual([
+      expect.objectContaining({
+        linearIssueId: "TASK-SHOW",
+        title: "Show task",
+        status: "active",
+        executions: [expect.objectContaining({ session: "codex:show-session", status: "active" })],
+        links: [{ kind: "workpad", ref: realpathSync(workpad) }],
+      }),
+    ]);
     expect(removeWorkpadLink(db, current, workpad, "TASK-SHOW")).toEqual({
       issue: "TASK-SHOW",
       ref: realpathSync(workpad),
@@ -205,6 +214,7 @@ describe("task lifecycle", () => {
     startTask(db, working, "TASK-OTHER-SESSION", {});
 
     expect(show(db, empty, {})).toBe("No related tasks");
+    expect(show(db, empty, { json: true })).toBe("[]");
     expect(show(db, working, {})).toContain("Task TASK-OTHER-SESSION");
   });
 
@@ -228,6 +238,13 @@ describe("task lifecycle", () => {
     );
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(result.stdout.toString().trim()).toBe("No related tasks");
+
+    const jsonResult = Bun.spawnSync(
+      [process.execPath, "src/cli.ts", "show", "--session", "cli-empty-session", "--json"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" },
+    );
+    expect(jsonResult.exitCode, jsonResult.stderr.toString()).toBe(0);
+    expect(JSON.parse(jsonResult.stdout.toString())).toEqual([]);
   });
 
   test("does not infer a task for workpads", () => {
@@ -279,8 +296,10 @@ describe("task lifecycle", () => {
     writeFileSync(workpad, "# Workpad\n");
     for (const args of [
       ["task", "start", "TASK-COMMAND"],
-      ["link", "workpad", workpad, "--task", "TASK-COMMAND"],
-      ["link", "remove", "workpad", workpad, "--task", "TASK-COMMAND"],
+      ["link", "workpad", "add", workpad, "--task", "TASK-COMMAND"],
+      ["link", "workpad", "remove", workpad, "--task", "TASK-COMMAND"],
+      ["link", "workpad", "LEGACY-WORKPAD", "--task", "TASK-COMMAND"],
+      ["link", "remove", "workpad", "LEGACY-WORKPAD", "--task", "TASK-COMMAND"],
       ["task", "cancel", "TASK-COMMAND"],
     ]) {
       const result = Bun.spawnSync([process.execPath, "src/cli.ts", ...args], {

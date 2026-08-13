@@ -63,7 +63,7 @@ wr pr add 124 --task MAL-123 --parent 123 --session "${CLAUDE_CODE_SESSION_ID}"
 Register every remembered workpad or other known link:
 
 ```bash
-wr link workpad ./workpad.md --task MAL-123 --session "${CLAUDE_CODE_SESSION_ID}"
+wr link workpad add ./workpad.md --task MAL-123 --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
 If the current branch has an open pull request and the task is known, explicitly refresh GitHub metadata after task registration:
@@ -80,10 +80,10 @@ Read back the reconstructed ledger:
 
 ```bash
 wr show --session "${CLAUDE_CODE_SESSION_ID}"
-wr tasks --global --session "${CLAUDE_CODE_SESSION_ID}"
-wr executions --global --session "${CLAUDE_CODE_SESSION_ID}"
-wr prs --global --session "${CLAUDE_CODE_SESSION_ID}"
-wr links --global --session "${CLAUDE_CODE_SESSION_ID}"
+wr task list --global --session "${CLAUDE_CODE_SESSION_ID}"
+wr execution list --global --session "${CLAUDE_CODE_SESSION_ID}"
+wr pr list --global --session "${CLAUDE_CODE_SESSION_ID}"
+wr link list --global --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
 Compare the output with the inventory. Report:

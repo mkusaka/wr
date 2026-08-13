@@ -529,7 +529,7 @@ type ShowTask = TaskRow & {
 export function show(
   db: Database,
   current: CurrentContext | null,
-  options: { task?: string; worktree?: string },
+  options: { task?: string; worktree?: string; json?: boolean },
 ): string {
   let rows: TaskRow[];
   if (options.task) {
@@ -561,7 +561,6 @@ export function show(
     );
   }
 
-  if (rows.length === 0) return "No related tasks";
   const tasks: ShowTask[] = rows.map((task) => ({
     id: task.id,
     linear_issue_id: task.linear_issue_id,
@@ -597,6 +596,34 @@ export function show(
         .all({ taskId: task.id }),
     ),
   }));
+
+  if (options.json) {
+    return JSON.stringify(
+      tasks.map((task) => ({
+        linearIssueId: task.linear_issue_id,
+        title: task.title,
+        status: task.status,
+        executions: task.executions.map((execution) => ({
+          status: execution.status,
+          session: `${execution.cli}:${execution.external_session_id}`,
+          worktreePath: execution.worktree_path,
+          branch: execution.branch,
+        })),
+        pullRequests: task.pullRequests.map((pullRequest) => ({
+          repo: pullRequest.repo,
+          number: pullRequest.number,
+          url: pullRequest.url,
+          headBranch: pullRequest.head_branch,
+          baseBranch: pullRequest.base_branch,
+          parentNumber: pullRequest.parent_number,
+        })),
+        links: task.links,
+      })),
+      null,
+      2,
+    );
+  }
+  if (tasks.length === 0) return "No related tasks";
 
   return tasks
     .map((task) => {

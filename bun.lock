@@ -5,6 +5,9 @@
     "": {
       "name": "wr",
       "dependencies": {
+        "@optique/core": "^1.2.1",
+        "@optique/run": "^1.2.1",
+        "@optique/valibot": "^1.2.1",
         "ink": "^7.1.1",
         "react": "^19.2.8",
         "react-devtools-core": "^7.0.1",
@@ -30,6 +33,12 @@
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.3", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q=="],
+
+    "@optique/core": ["@optique/core@1.2.1", "", {}, "sha512-9W2SkViGJ5zAnzSwBkJNr1M4FlQ+iGO2o3LHtz18uwNrvbyXutTbXrNXS6vJHe3CY1gccFpjJTWDfEBaLcIERg=="],
+
+    "@optique/run": ["@optique/run@1.2.1", "", { "dependencies": { "@optique/core": "1.2.1" } }, "sha512-7sc0QXBfqFs0YlFUa4h0lavRR7hGxOl3V0M7qC7FwkmP7bhHNkWmbhusnBhcXWWN2b/G4CDJfITlGcoPGVAYPw=="],
+
+    "@optique/valibot": ["@optique/valibot@1.2.1", "", { "dependencies": { "@optique/core": "1.2.1" }, "peerDependencies": { "valibot": "^1.2.0" } }, "sha512-YALhgw5c/VSDS2N4hYLMhwkLGDfvYgFax9567UCfFasn8BP8c/5EF0YclxpsyxU1QIWKqWKNdQqaat9bWLxtKA=="],
 
     "@oxc-parser/binding-android-arm-eabi": ["@oxc-parser/binding-android-arm-eabi@0.140.0", "", { "os": "android", "cpu": "arm" }, "sha512-ZfjDZ422mo7eo3b3VltqNsV9kmv1qt/sPEAMSl64iOSwhVfd0eIZ9LB79Mbs1xYXJnk7WSROwzBCKDIiVxPTvQ=="],
 
