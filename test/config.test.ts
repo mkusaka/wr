@@ -65,6 +65,7 @@ test("session hooks skip disabled repositories and register enabled repositories
     ...process.env,
     XDG_CONFIG_HOME: tempDir("wr-hook-config"),
     XDG_DATA_HOME: dataHome,
+    XDG_STATE_HOME: tempDir("wr-hook-state"),
     TERM_SESSION_ID: "config-hook-terminal",
   };
   const payload = JSON.stringify({

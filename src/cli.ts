@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { object, or } from "@optique/core/constructs";
 import { message } from "@optique/core/message";
 import { optional, withDefault } from "@optique/core/modifiers";
@@ -332,22 +332,106 @@ async function runInternal(
   action: "session-event" | "session-end",
   cliValue: string,
 ): Promise<void> {
+  const startedAt = performance.now();
+  const operationId = process.env.WR_HOOK_OPERATION_ID ?? crypto.randomUUID();
+  const logPath =
+    process.env.WR_HOOK_LOG_PATH ??
+    join(
+      process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? process.cwd(), ".local", "state"),
+      "wr",
+      "hook.jsonl",
+    );
+  const log = (phase: string, details: Record<string, unknown> = {}) => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    appendFileSync(
+      logPath,
+      `${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        operationId,
+        pid: process.pid,
+        action,
+        cli: cliValue,
+        phase,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        ...details,
+      })}\n`,
+    );
+  };
+
+  const payloadText = await Bun.stdin.text();
+  if (process.env.WR_HOOK_WORKER !== "1") {
+    log("received");
+    const sourceEntrypoint = !Bun.main.startsWith("/$bunfs/");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        ...(sourceEntrypoint ? [Bun.main] : []),
+        "internal",
+        action,
+        "--cli",
+        cliValue,
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, WR_HOOK_OPERATION_ID: operationId, WR_HOOK_WORKER: "1" },
+        stdin: new TextEncoder().encode(payloadText),
+        stdout: "ignore",
+        stderr: "pipe",
+        timeout: 3_000,
+        killSignal: "SIGKILL",
+      },
+    );
+    log("worker-started", { workerPid: child.pid });
+    const stderrPromise = new Response(child.stderr).text();
+    const exitCode = await child.exited;
+    const stderr = (await stderrPromise).trim();
+    if (child.signalCode === "SIGKILL") {
+      log("timeout", { workerPid: child.pid });
+      console.error(`wr hook: timed out after 3s; see ${logPath}`);
+    } else {
+      log("worker-exited", { workerPid: child.pid, exitCode, stderr: stderr || undefined });
+      if (stderr) console.error(stderr);
+    }
+    return;
+  }
+
   try {
+    log("parse-start");
     const result = v.safeParse(CliSchema, cliValue);
     if (!result.success) throw new Error("--cli must be codex or claude");
     const cli: Cli = result.output;
-    const payload = parseHookPayload(await Bun.stdin.text());
-    if (action === "session-event" && !isRepositoryEnabled(payload.cwd)) return;
+    const payload = parseHookPayload(payloadText);
+    log("parse-completed", { source: payload.source });
+    if (action === "session-event") {
+      log("repository-check-start");
+      if (!isRepositoryEnabled(payload.cwd)) {
+        log("repository-disabled");
+        return;
+      }
+      log("repository-check-completed");
+    }
     const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
-    if (action === "session-end" && !existsSync(dbPath)) return;
+    if (action === "session-end" && !existsSync(dbPath)) {
+      log("database-missing");
+      return;
+    }
+    log("database-open-start");
     const db = openDb(dbPath);
+    log("database-open-completed");
     try {
+      log("database-write-start");
       if (action === "session-event") registerSessionEvent(db, cli, payload);
       else endSession(db, cli, payload);
+      log("database-write-completed");
     } finally {
       db.close();
     }
+    log("completed");
   } catch (error) {
+    log("error", {
+      error: error instanceof Error ? error.message : String(error),
+      code: (error as { code?: string }).code,
+    });
     console.error(`wr hook: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

@@ -26,4 +26,5 @@ jobs:
       - run: bun run knip
       - run: bun run test
       - run: bun run compile
+      - run: WR_TEST_BINARY=./dist/wr bun test ./test/concurrency.test.ts --test-name-pattern hook
       - run: ./dist/wr --help

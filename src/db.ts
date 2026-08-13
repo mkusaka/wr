@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import schema from "./schema.sql" with { type: "text" };
-import { CountRowSchema, DbIntegerSchema } from "./validation.ts";
+import { CountRowSchema, DbIntegerSchema, NonEmptyStringSchema } from "./validation.ts";
 
 const SCHEMA_VERSION = 4;
 
@@ -17,8 +17,13 @@ export function openDb(path = defaultDbPath()): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true, strict: true });
   db.run("PRAGMA busy_timeout = 5000");
-  db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
+
+  const journal = v.parse(
+    v.object({ journal_mode: NonEmptyStringSchema }),
+    db.query("PRAGMA journal_mode").get(),
+  );
+  if (path !== ":memory:" && journal.journal_mode !== "wal") db.run("PRAGMA journal_mode = WAL");
 
   const readVersion = () => {
     const row = v.parse(
