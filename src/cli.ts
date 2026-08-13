@@ -87,7 +87,7 @@ Usage:
   wr task done [ISSUE] [--session ID]
   wr task cancel [ISSUE] [--session ID]
   wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
-  wr pr remove NUMBER [--task ISSUE] [--session ID]
+  wr pr remove NUMBER --task ISSUE
   wr link workpad REF [--task ISSUE] [--session ID]
   wr link remove workpad REF [--task ISSUE] [--session ID]
   wr show [--task ISSUE | --worktree PATH] [--session ID]
@@ -112,7 +112,7 @@ const TASK_HELP = `Usage:
 
 const PR_HELP = `Usage:
   wr pr add NUMBER [--task ISSUE] [--parent NUMBER] [--session ID]
-  wr pr remove NUMBER [--task ISSUE] [--session ID]`;
+  wr pr remove NUMBER --task ISSUE`;
 
 const LINK_HELP = `Usage:
   wr link workpad REF [--task ISSUE] [--session ID]
@@ -629,10 +629,9 @@ async function main(): Promise<void> {
       const number = requireInteger(positionals[0], "PR number");
       if (action === "remove") {
         if (values.parent !== undefined) throw new Error("pr remove does not accept --parent");
-        const current = values.task
-          ? null
-          : resolveCurrentContext(db, process.cwd(), values.session);
-        const result = removePullRequest(db, current, number, values.task);
+        if (values.session !== undefined) throw new Error("pr remove does not accept --session");
+        if (!values.task) throw new Error("pr remove requires --task");
+        const result = removePullRequest(db, number, values.task);
         console.log(`removed ${result.repo}#${number} task=${result.issue}`);
         return;
       }

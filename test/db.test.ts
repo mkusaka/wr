@@ -33,7 +33,7 @@ describe("database", () => {
         .all(),
     );
 
-    expect(version.user_version).toBe(3);
+    expect(version.user_version).toBe(4);
     expect(journal.journal_mode).toBe("wal");
     expect(foreignKeys.foreign_keys).toBe(1);
     expect(indexes.map((row) => row.name)).toEqual([
@@ -41,13 +41,14 @@ describe("database", () => {
       "idx_exec_active_checkout",
       "idx_exec_active_task",
       "idx_run_checkouts_checkout",
+      "idx_run_prs_pull_request",
       "idx_runs_active_terminal",
       "idx_task_links_checkout_ref",
       "idx_task_links_task_ref",
     ]);
   });
 
-  test("reopens a version 3 database", () => {
+  test("reopens a version 4 database", () => {
     const path = join(tempDir("wr-db"), "wr.db");
     db = openDb(path);
     db.close();
@@ -66,13 +67,13 @@ describe("database", () => {
     expect(() => openDb(path)).toThrow("Unsupported database schema version: 9");
   });
 
-  test("does not migrate a version 2 database", () => {
+  test("does not migrate a version 3 database", () => {
     const path = join(tempDir("wr-db"), "wr.db");
     db = openDb(path);
-    db.run("PRAGMA user_version = 2");
+    db.run("PRAGMA user_version = 3");
     db.close();
     db = null;
-    expect(() => openDb(path)).toThrow("Unsupported database schema version: 2");
+    expect(() => openDb(path)).toThrow("Unsupported database schema version: 3");
   });
 
   test("rejects a foreign key violation", () => {

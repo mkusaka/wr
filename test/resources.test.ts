@@ -132,6 +132,51 @@ describe("resource queries", () => {
     );
   });
 
+  test("finds an unassigned pull request from its session run and checkout", () => {
+    db = testDb();
+    const current = testContext(db, "unassigned-pr-session");
+    db.query("UPDATE git_checkouts SET branch = 'feature' WHERE id = $id").run({
+      id: current.checkoutId,
+    });
+    db.query(
+      `INSERT INTO pull_requests
+         (id, repo, number, url, head_branch, base_branch)
+       VALUES ('unassigned-pr', 'owner/repo', 725, 'https://example.test/725', 'feature', 'main')`,
+    ).run();
+    db.query(
+      `INSERT INTO session_run_pull_requests
+         (session_run_id, checkout_id, pull_request_id)
+       VALUES ($runId, $checkoutId, 'unassigned-pr')`,
+    ).run({ runId: current.sessionRunId, checkoutId: current.checkoutId });
+
+    for (const filter of [
+      { session: "unassigned-pr-session" },
+      { run: current.sessionRunId },
+      { checkout: current.checkoutId! },
+      { repoRoot: current.checkout!.repoRoot },
+      { worktreePath: current.checkout!.worktreePath },
+      { branch: "feature" },
+      { pullRequest: 725 },
+    ]) {
+      expect(queryResource(db, "prs", filter)[0]).toEqual(
+        expect.objectContaining({ number: 725, linearIssueId: null }),
+      );
+    }
+    expect(queryResource(db, "sessions", { pullRequest: 725 })[0]?.externalSessionId).toBe(
+      "unassigned-pr-session",
+    );
+    expect(queryResource(db, "runs", { pullRequest: 725 })[0]?.id).toBe(current.sessionRunId);
+    expect(queryResource(db, "checkouts", { pullRequest: 725 })[0]?.id).toBe(current.checkoutId);
+    expect(queryResource(db, "branches", { pullRequest: 725 })[0]?.branch).toBe("feature");
+    expect(queryResource(db, "terminals", { pullRequest: 725 })[0]?.runId).toBe(
+      current.sessionRunId,
+    );
+    expect(queryResource(db, "repos", { pullRequest: 725 })[0]?.repoRoot).toBe(
+      current.checkout!.repoRoot,
+    );
+    expect(queryResource(db, "tasks", { pullRequest: 725 })).toEqual([]);
+  });
+
   test("orders tasks by most recent update", () => {
     const { current } = relatedRecords();
     startTask(db!, current, "MAL-OLD", {});

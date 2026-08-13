@@ -182,8 +182,8 @@ describe("task lifecycle", () => {
     startTask(db, current, "TASK-SHOW", { title: "Show task" });
     const workpad = join(tempDir("wr-workpad"), "workpad.md");
     writeFileSync(workpad, "# Workpad\n");
-    addWorkpadLink(db, current, workpad);
-    addWorkpadLink(db, current, workpad);
+    addWorkpadLink(db, current, workpad, "TASK-SHOW");
+    addWorkpadLink(db, current, workpad, "TASK-SHOW");
     expect(
       v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM task_links").get()).count,
     ).toBe(1);
@@ -230,7 +230,7 @@ describe("task lifecycle", () => {
     expect(result.stdout.toString().trim()).toBe("No related tasks");
   });
 
-  test("registers and removes a workpad without a task when inference is unavailable", () => {
+  test("does not infer a task for workpads", () => {
     db = testDb();
     const current = testContext(db, "unassigned-workpad-session");
     const workpad = join(tempDir("wr-unassigned-workpad"), "workpad.md");
@@ -241,7 +241,6 @@ describe("task lifecycle", () => {
       ref: realpathSync(workpad),
     });
     startTask(db, current, "TASK-FIRST", {});
-    startTask(db, current, "TASK-SECOND", {});
     expect(addWorkpadLink(db, current, workpad).issue).toBeNull();
     expect(
       v.parse(
@@ -366,7 +365,7 @@ fi
     }
   });
 
-  test("links an inferred task only when exactly one is active", () => {
+  test("does not infer a task for pull requests", () => {
     db = testDb();
     const current = testContext(db);
     const bin = tempDir("wr-fake-gh-unlinked");
@@ -403,7 +402,13 @@ fi
       expect(
         v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM task_pull_requests").get())
           .count,
-      ).toBe(1);
+      ).toBe(0);
+      expect(
+        v.parse(
+          CountRowSchema,
+          db.query("SELECT COUNT(*) AS count FROM session_run_pull_requests").get(),
+        ).count,
+      ).toBe(3);
     } finally {
       process.env.PATH = previousPath;
     }
@@ -425,7 +430,7 @@ fi
     db.query(
       "INSERT INTO task_pull_requests (task_id, pull_request_id) VALUES ($taskId, 'pr-1')",
     ).run({ taskId: task.id });
-    expect(removePullRequest(db, null, 42, "TASK-PR")).toMatchObject({ removed: true });
+    expect(removePullRequest(db, 42, "TASK-PR")).toMatchObject({ removed: true });
     expect(
       v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM pull_requests").get()).count,
     ).toBe(1);
@@ -489,13 +494,25 @@ fi
       expect(syncPullRequests(db, current)).toMatchObject({
         checkouts: 2,
         pullRequests: 2,
-        linked: 1,
+        linked: 0,
       });
       expect(
         v.parse(CountRowSchema, db.query("SELECT COUNT(*) AS count FROM task_pull_requests").get())
           .count,
-      ).toBe(1);
+      ).toBe(0);
+      expect(
+        v.parse(
+          CountRowSchema,
+          db.query("SELECT COUNT(*) AS count FROM session_run_pull_requests").get(),
+        ).count,
+      ).toBe(2);
       expect(syncPullRequests(db, current)).toMatchObject({ pullRequests: 2, linked: 0 });
+      expect(
+        v.parse(
+          CountRowSchema,
+          db.query("SELECT COUNT(*) AS count FROM session_run_pull_requests").get(),
+        ).count,
+      ).toBe(2);
     } finally {
       delete process.env.WR_FAKE_GH_FAIL_SECOND;
       process.env.PATH = previousPath;

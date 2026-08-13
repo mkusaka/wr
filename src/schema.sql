@@ -75,6 +75,17 @@ CREATE TABLE task_pull_requests (
   PRIMARY KEY (task_id, pull_request_id)
 );
 
+CREATE TABLE session_run_pull_requests (
+  session_run_id   TEXT NOT NULL REFERENCES session_runs(id),
+  checkout_id      TEXT NOT NULL REFERENCES git_checkouts(id),
+  pull_request_id  TEXT NOT NULL REFERENCES pull_requests(id),
+  created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_run_id, checkout_id, pull_request_id)
+);
+
+CREATE INDEX idx_run_prs_pull_request
+  ON session_run_pull_requests(pull_request_id);
+
 CREATE TABLE task_links (
   id             TEXT PRIMARY KEY,
   task_id        TEXT REFERENCES tasks(id),

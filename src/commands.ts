@@ -72,22 +72,6 @@ function inferTask(db: Database, checkoutId: string | null): TaskRow {
   return tasks[0]!;
 }
 
-function inferOptionalTask(db: Database, checkoutId: string | null): TaskRow | null {
-  if (!checkoutId) return null;
-  const tasks = v.parse(
-    v.array(TaskRowSchema),
-    db
-      .query(
-        `SELECT DISTINCT t.id, t.linear_issue_id, t.title, t.status
-           FROM tasks t
-           JOIN executions e ON e.task_id = t.id
-          WHERE e.checkout_id = $checkoutId AND e.status = 'active'`,
-      )
-      .all({ checkoutId }),
-  );
-  return tasks.length === 1 ? tasks[0]! : null;
-}
-
 export function addTask(
   db: Database,
   issue: string,
@@ -310,11 +294,10 @@ function upsertPullRequest(
 
 export function removePullRequest(
   db: Database,
-  current: CurrentContext | null,
   number: number,
-  issue?: string,
+  issue: string,
 ): { issue: string; repo: string; removed: boolean } {
-  const task = issue ? findTask(db, issue) : inferTask(db, current?.checkoutId ?? null);
+  const task = findTask(db, issue);
   const rows = v.parse(
     v.array(v.object({ id: NonEmptyStringSchema, repo: NonEmptyStringSchema })),
     db
@@ -365,20 +348,10 @@ export function syncPullRequests(
   }
 
   const pullRequests = new Map<string, { repo: string; pr: PullRequestData }>();
-  const links: Array<{ repo: string; pr: PullRequestData; taskId: string }> = [];
+  const contexts: Array<{ repo: string; pr: PullRequestData; checkoutId: string }> = [];
   let skipped = 0;
   for (const row of checkoutRows.values()) {
     const checkout = discoverCheckout(row.worktree_path, true)!;
-    const tasks = v.parse(
-      v.array(IdRowSchema),
-      db
-        .query(
-          `SELECT DISTINCT t.id
-             FROM tasks t JOIN executions e ON e.task_id = t.id
-            WHERE e.checkout_id = $checkoutId AND e.status = 'active'`,
-        )
-        .all({ checkoutId: row.id }),
-    );
     const repoRaw = runGh(["repo", "view", "--json", "nameWithOwner"], checkout.worktreePath);
     let repo: string;
     try {
@@ -427,10 +400,9 @@ export function syncPullRequests(
       throw new Error(`Multiple open pull requests found: ${repo}:${checkout.branch}`);
     const pr = prs[0]!;
     pullRequests.set(`${repo}#${pr.number}`, { repo, pr });
-    if (tasks.length === 1) links.push({ repo, pr, taskId: tasks[0]!.id });
+    contexts.push({ repo, pr, checkoutId: row.id });
   }
 
-  let linked = 0;
   db.transaction(() => {
     const ids = new Map<string, string>();
     for (const item of pullRequests.values()) {
@@ -439,21 +411,23 @@ export function syncPullRequests(
         upsertPullRequest(db, item.repo, item.pr, undefined),
       );
     }
-    for (const item of links) {
-      const pullRequestId = ids.get(`${item.repo}#${item.pr.number}`)!;
-      linked += db
-        .query(
-          `INSERT INTO task_pull_requests (task_id, pull_request_id)
-           VALUES ($taskId, $pullRequestId)
-           ON CONFLICT DO NOTHING`,
-        )
-        .run({ taskId: item.taskId, pullRequestId }).changes;
+    for (const item of contexts) {
+      db.query(
+        `INSERT INTO session_run_pull_requests
+           (session_run_id, checkout_id, pull_request_id)
+         VALUES ($runId, $checkoutId, $pullRequestId)
+         ON CONFLICT DO NOTHING`,
+      ).run({
+        runId: current.sessionRunId,
+        checkoutId: item.checkoutId,
+        pullRequestId: ids.get(`${item.repo}#${item.pr.number}`)!,
+      });
     }
   }).immediate();
   return {
     checkouts: checkoutRows.size,
     pullRequests: pullRequests.size,
-    linked,
+    linked: 0,
     skipped,
   };
 }
@@ -464,7 +438,8 @@ export function addPullRequest(
   number: number,
   options: { task?: string; parent?: number },
 ): { repo: string; warning: string | null } {
-  if (!current.checkout) throw new Error("A Git checkout is required to register a pull request");
+  if (!current.checkout || !current.checkoutId)
+    throw new Error("A Git checkout is required to register a pull request");
   const repoRaw = runGh(["repo", "view", "--json", "nameWithOwner"]);
   let repoValue: v.InferOutput<typeof RepositorySchema>;
   try {
@@ -476,9 +451,7 @@ export function addPullRequest(
   const child = loadPullRequest(repo, number);
   if (options.parent === number) throw new Error("A pull request cannot be its own parent");
   const parent = options.parent === undefined ? null : loadPullRequest(repo, options.parent);
-  const task = options.task
-    ? findTask(db, options.task)
-    : inferOptionalTask(db, current.checkoutId);
+  const task = options.task ? findTask(db, options.task) : null;
   const warning =
     parent && child.baseRefName !== parent.headRefName
       ? `Stack branch mismatch: child base=${child.baseRefName}, parent head=${parent.headRefName}`
@@ -487,6 +460,16 @@ export function addPullRequest(
   db.transaction(() => {
     const parentId = parent ? upsertPullRequest(db, repo, parent, null) : null;
     const childId = upsertPullRequest(db, repo, child, parentId);
+    db.query(
+      `INSERT INTO session_run_pull_requests
+         (session_run_id, checkout_id, pull_request_id)
+       VALUES ($runId, $checkoutId, $pullRequestId)
+       ON CONFLICT DO NOTHING`,
+    ).run({
+      runId: current.sessionRunId,
+      checkoutId: current.checkoutId,
+      pullRequestId: childId,
+    });
     if (task) {
       db.query(
         `INSERT INTO task_pull_requests (task_id, pull_request_id)
@@ -507,7 +490,7 @@ export function addWorkpadLink(
 ): { issue: string | null; ref: string } {
   if (!current.checkoutId) throw new Error("A Git checkout is required to register a workpad");
   const ref = existsSync(path) ? realpathSync(path) : path;
-  const task = issue ? findTask(db, issue) : inferOptionalTask(db, current.checkoutId);
+  const task = issue ? findTask(db, issue) : null;
   db.query(
     `INSERT INTO task_links (id, task_id, checkout_id, kind, ref)
      VALUES ($id, $taskId, $checkoutId, 'workpad', $ref)
@@ -524,7 +507,7 @@ export function removeWorkpadLink(
 ): { issue: string | null; ref: string } {
   if (!current?.checkoutId) throw new Error("A Git checkout is required to remove a workpad");
   const ref = existsSync(path) ? realpathSync(path) : path;
-  const task = issue ? findTask(db, issue) : inferOptionalTask(db, current.checkoutId);
+  const task = issue ? findTask(db, issue) : null;
   const removed = db
     .query(
       `DELETE FROM task_links

@@ -109,13 +109,13 @@ wr tasks --json
 wr tasks --limit 20
 ```
 
-Commands that require a task infer an omitted task only when the current checkout has exactly one active task. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
+`wr task done` and `wr task cancel` infer an omitted task only when the current checkout has exactly one active task. Artifact commands never infer task relationships. Use `--session <id>` when the current session cannot be discovered automatically. The ID must already be registered when the CLI type cannot be inferred from the environment.
 
 `wr task add` registers an unstarted task with `open` status without creating a session, checkout, or execution relationship. Repeating it preserves the current status and updates the title only when `--title` is provided. `wr task start` changes an open task to `active`.
 
-`wr pr add` can register a pull request without a task. When `--task` is omitted, it links the pull request if the current checkout has exactly one active task and otherwise stores the pull request without a task relationship.
+`wr pr add` registers a task relationship only when `--task` is provided. The command always records the current session run and checkout independently of the optional task relationship.
 
-`wr link workpad` accepts an existing path or an identifier such as a task ID. Existing paths are normalized before storage. It always associates the workpad with the current checkout and can register it without a task. When `--task` is omitted, it links the workpad to a task if the current checkout has exactly one active task and otherwise stores the workpad without a task relationship. `wr link remove workpad` applies the same normalization and task inference rule and removes the matching relationship from the current checkout.
+`wr link workpad` accepts an existing path or an identifier such as a task ID. Existing paths are normalized before storage. It always associates the workpad with the current checkout and registers a task relationship only when `--task` is provided. `wr link remove workpad` applies the same normalization and explicit task rule and removes the matching relationship from the current checkout.
 
 `wr task done` closes executions for the selected task only. Executions in the current CLI session become `finished`; executions in other sessions become `abandoned`. Executions for other tasks in the same session remain untouched.
 
@@ -127,7 +127,7 @@ Resource commands are scoped to the current repository when run inside a Git che
 
 Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` to filter that JSON with the installed `jq` command. Pass `--json` without a value to list the available fields for a resource.
 
-`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and links it only when that checkout has exactly one active task. With no active task or multiple active tasks, it stores the pull request without a task relationship. GitHub lookup failures stop the command before any database writes.
+`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and records the discovering session run and checkout without creating task relationships. GitHub lookup failures stop the command before any database writes.
 
 `wr sessions` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr runs` lists their individual SessionRuns. Relationship filters traverse stored Run-to-Checkout and Execution relationships, so no GitHub or Linear network lookup is performed.
 

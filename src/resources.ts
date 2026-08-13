@@ -160,7 +160,7 @@ const RELATIONSHIPS = `WITH relationships AS (
   LEFT JOIN task_links tl ON tl.task_id = t.id AND tl.checkout_id = gc.id
   UNION ALL
   SELECT
-    NULL, NULL, NULL, NULL, NULL, NULL,
+    t.id, t.linear_issue_id, t.title, t.status, t.created_at, t.updated_at,
     cs.id, cs.cli, cs.external_session_id, cs.parent_session_id, cs.created_at,
     cs.cli || ':' || cs.external_session_id,
     sr.id, sr.iterm_session_id, sr.started_cwd, sr.source, sr.started_at, sr.last_seen_at,
@@ -168,12 +168,19 @@ const RELATIONSHIPS = `WITH relationships AS (
     CASE WHEN sr.ended_at IS NULL THEN 'active' ELSE 'ended' END,
     NULL, NULL, NULL, NULL, NULL,
     gc.id, gc.repo_root, gc.worktree_path, gc.branch, gc.created_at,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    pr.id, pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch,
+    pr.parent_pr_id, parent.number, pr.created_at,
     NULL, NULL, NULL, NULL
   FROM cli_sessions cs
   JOIN session_runs sr ON sr.cli_session_id = cs.id
   JOIN session_run_checkouts src ON src.session_run_id = sr.id
   JOIN git_checkouts gc ON gc.id = src.checkout_id
+  LEFT JOIN session_run_pull_requests srpr
+    ON srpr.session_run_id = sr.id AND srpr.checkout_id = gc.id
+  LEFT JOIN pull_requests pr ON pr.id = srpr.pull_request_id
+  LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
+  LEFT JOIN task_pull_requests tpr ON tpr.pull_request_id = pr.id
+  LEFT JOIN tasks t ON t.id = tpr.task_id
   UNION ALL
   SELECT
     t.id, t.linear_issue_id, t.title, t.status, t.created_at, t.updated_at,
@@ -325,9 +332,14 @@ function queryRepositories(db: Database, filters: ResourceFilters): Array<Record
          LEFT JOIN cli_sessions run_cs ON run_cs.id = sr.cli_session_id
          LEFT JOIN task_pull_requests tpr ON tpr.task_id = t.id
          LEFT JOIN pull_requests pr ON pr.id = tpr.pull_request_id
+         LEFT JOIN session_run_pull_requests srpr
+           ON srpr.session_run_id = sr.id AND srpr.checkout_id = gc.id
+         LEFT JOIN pull_requests context_pr ON context_pr.id = srpr.pull_request_id
+         LEFT JOIN task_pull_requests context_tpr ON context_tpr.pull_request_id = context_pr.id
+         LEFT JOIN tasks context_t ON context_t.id = context_tpr.task_id
          LEFT JOIN task_links tl ON tl.checkout_id = gc.id
          LEFT JOIN tasks link_t ON link_t.id = tl.task_id
-        WHERE ($task IS NULL OR t.linear_issue_id = $task OR link_t.linear_issue_id = $task)
+        WHERE ($task IS NULL OR t.linear_issue_id = $task OR context_t.linear_issue_id = $task OR link_t.linear_issue_id = $task)
           AND ($session IS NULL OR cs.external_session_id = $session OR run_cs.external_session_id = $session)
           AND ($run IS NULL OR e.session_run_id = $run OR sr.id = $run)
           AND ($checkout IS NULL OR gc.id = $checkout)
@@ -337,7 +349,7 @@ function queryRepositories(db: Database, filters: ResourceFilters): Array<Record
           AND ($repoRoot IS NULL OR gc.repo_root = $repoRoot)
           AND ($worktreePath IS NULL OR gc.worktree_path = $worktreePath)
           AND ($branch IS NULL OR gc.branch = $branch)
-          AND ($pullRequest IS NULL OR pr.number = $pullRequest)
+          AND ($pullRequest IS NULL OR pr.number = $pullRequest OR context_pr.number = $pullRequest)
         GROUP BY gc.repo_root
         ORDER BY updatedAt DESC, repoRoot`,
       )

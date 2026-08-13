@@ -99,7 +99,7 @@ wr pr remove 123 --task MAL-123
 wr sync
 ```
 
-When `--task` is omitted, `wr pr add` links the pull request if the current checkout has exactly one active task. With no active task or multiple active tasks, it registers the pull request without a task relationship. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. It applies the same linking rule to the current checkout and active checkouts in the current CLI session.
+`wr pr add` creates a task relationship only when `--task` is provided. It always records the current session run and checkout. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. Sync records session run and checkout relationships without inferring tasks.
 
 Register a workpad:
 
@@ -111,7 +111,7 @@ wr link remove workpad MOQ-1291
 wr link remove workpad ./workpad.md --task MAL-123
 ```
 
-Workpad references may be existing paths or identifiers such as task IDs. Existing paths are normalized. Workpads are always associated with the current checkout. When `--task` is omitted, `wr` links the workpad to a task if the checkout has exactly one active task. With no active task or multiple active tasks, it stores or removes the checkout's workpad without a task relationship.
+Workpad references may be existing paths or identifiers such as task IDs. Existing paths are normalized. Workpads are always associated with the current checkout and create a task relationship only when `--task` is provided.
 
 ## Preserve boundaries
 
