@@ -6,6 +6,7 @@
     "moduleDetection": "force",
     "types": ["bun"],
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,

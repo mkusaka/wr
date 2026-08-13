@@ -3,6 +3,8 @@ import { Database } from "bun:sqlite";
 import { parseArgs } from "node:util";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { render } from "ink";
+import { createElement } from "react";
 import * as v from "valibot";
 import {
   disableRepository,
@@ -41,6 +43,7 @@ import {
   type ResourceFilters,
   type ResourceName,
 } from "./resources.ts";
+import { queryFocusTargets, WrUi } from "./ui.tsx";
 import {
   CliSchema,
   DbIntegerSchema,
@@ -93,6 +96,7 @@ Usage:
   wr show [--task ISSUE | --worktree PATH] [--session ID]
   wr sync [--session ID]
   wr doctor
+  wr ui
   wr tasks|sessions|runs|checkouts|executions|links|prs|branches|terminals|repos [FILTERS]
   wr runs focus SESSION_ID|RUN_ID
   wr terminals focus TERMINAL_ID
@@ -126,6 +130,9 @@ const SYNC_HELP = `Usage:
 
 const DOCTOR_HELP = `Usage:
   wr doctor`;
+
+const UI_HELP = `Usage:
+  wr ui`;
 
 function helpRequested(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
@@ -445,6 +452,21 @@ async function main(): Promise<void> {
     }
     if (args.length !== 0) throw new Error("doctor does not accept arguments");
     runDoctor();
+    return;
+  }
+
+  if (command === "ui") {
+    if (helpRequested(args)) {
+      console.log(UI_HELP);
+      return;
+    }
+    if (args.length !== 0) throw new Error("ui does not accept arguments");
+    const db = openDb(process.env.WR_DB_PATH);
+    try {
+      await render(createElement(WrUi, { targets: queryFocusTargets(db) })).waitUntilExit();
+    } finally {
+      db.close();
+    }
     return;
   }
 

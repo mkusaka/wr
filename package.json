@@ -16,10 +16,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "ink": "^7.1.1",
+    "react": "^19.2.8",
+    "react-devtools-core": "^7.0.1",
     "valibot": "^1.4.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/react": "^19.2.18",
     "knip": "6.29.0",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",

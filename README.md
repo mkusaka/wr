@@ -84,6 +84,7 @@ wr link workpad ./workpad.md --task MAL-123
 wr link remove workpad MOQ-1291
 
 wr show
+wr ui
 wr doctor
 wr show --task MAL-123
 wr show --worktree .
@@ -134,5 +135,7 @@ Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` t
 Session runs and Git checkouts are related independently of tasks. SessionStart records the starting checkout, and later `wr` commands record the checkout where they run. `wr task start --worktree PATH` also records the selected checkout. An Execution is created only by `wr task start`; registering a run never creates one implicitly.
 
 When `it2` is available, `wr runs` marks each pane as `live` or `closed`. Use `wr runs focus CLI:ID` or `wr runs focus RUN_ID` to focus its active iTerm2 pane. Without `it2`, pane status is `unknown`.
+
+`wr ui` lists active iTerm2-backed runs across the ledger. Type to filter by task ID, repository, branch, pull request number or URL, and session ID. Use the arrow keys to select a row and Enter to focus it. The list is loaded once at startup.
 
 `wr doctor` performs read-only database integrity and foreign-key checks, reports repository opt-in and current session registration, checks optional command availability, and verifies that both lifecycle hook commands appear in the Claude Code and Codex user hook files.
