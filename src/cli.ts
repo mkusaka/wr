@@ -358,8 +358,10 @@ async function runInternal(
     );
   };
 
+  const isWorker = process.env.WR_HOOK_WORKER === "1";
+  if (!isWorker) log("spawned");
   const payloadText = await Bun.stdin.text();
-  if (process.env.WR_HOOK_WORKER !== "1") {
+  if (!isWorker) {
     log("received");
     const sourceEntrypoint = !Bun.main.startsWith("/$bunfs/");
     const child = Bun.spawn(

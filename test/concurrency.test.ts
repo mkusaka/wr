@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as v from "valibot";
 import { enableRepository } from "../src/config.ts";
@@ -112,6 +112,58 @@ test("concurrent session hooks finish and register every session", async () => {
     db.close();
   }
 }, 15_000);
+
+test("session hook logs its start before stdin closes", async () => {
+  const stateHome = tempDir("wr-hook-stdin-state");
+  const env = {
+    ...process.env,
+    XDG_CONFIG_HOME: tempDir("wr-hook-stdin-config"),
+    XDG_DATA_HOME: tempDir("wr-hook-stdin-data"),
+    XDG_STATE_HOME: stateHome,
+    TERM_SESSION_ID: "hook-stdin-terminal",
+  };
+  enableRepository(process.cwd(), env);
+  const child = Bun.spawn([...hookCommand, "internal", "session-event", "--cli", "codex"], {
+    cwd: process.cwd(),
+    env,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const logPath = join(stateHome, "wr", "hook.jsonl");
+  const deadline = Date.now() + 2_000;
+  while (
+    (!existsSync(logPath) || !readFileSync(logPath, "utf8").endsWith("\n")) &&
+    Date.now() < deadline
+  ) {
+    // oxlint-disable-next-line eslint/no-await-in-loop
+    await Bun.sleep(25);
+  }
+  try {
+    expect(existsSync(logPath)).toBe(true);
+    expect(
+      readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => (JSON.parse(line) as { phase: string }).phase),
+    ).toEqual(["spawned"]);
+  } finally {
+    child.stdin.write(
+      JSON.stringify({ session_id: "hook-stdin-session", cwd: process.cwd(), source: "startup" }),
+    );
+    child.stdin.end();
+    await child.exited;
+  }
+  expect(child.exitCode).toBe(0);
+  expect(await new Response(child.stderr).text()).toBe("");
+  expect(
+    readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { phase: string }).phase)
+      .filter((phase) => phase === "spawned"),
+  ).toHaveLength(1);
+}, 5_000);
 
 test("session hook times out with its blocking phase in the diagnostic log", async () => {
   const dataHome = tempDir("wr-hook-timeout");
