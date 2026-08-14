@@ -64,6 +64,7 @@ CREATE TABLE pull_requests (
   url           TEXT,
   head_branch   TEXT,
   base_branch   TEXT,
+  state         TEXT CHECK (state IS NULL OR state IN ('open','closed','merged')),
   parent_pr_id  TEXT REFERENCES pull_requests(id),
   created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(repo, number)

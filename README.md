@@ -77,6 +77,8 @@ wr pr add 122
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-123 --parent 123
 wr pr remove 123 --task MAL-123
+wr pr sync
+wr pr sync --all
 wr sync
 wr link workpad add ./workpad.md
 wr link workpad add MOQ-1291
@@ -117,6 +119,8 @@ wr task list --limit 20
 
 `wr pr add` registers a task relationship only when `--task` is provided. The command always records the current session run and checkout independently of the optional task relationship.
 
+`wr pr sync` refreshes GitHub state for registered pull requests without requiring a current session or repository. By default it checks pull requests whose state is unknown or `open`; pass `--all` to also refresh `closed` and `merged` pull requests.
+
 `wr link workpad add` accepts an existing path or an identifier such as a task ID. Existing paths are normalized before storage. It always associates the workpad with the current checkout and registers a task relationship only when `--task` is provided. `wr link workpad remove` applies the same normalization and explicit task rule and removes the matching relationship from the current checkout.
 
 `wr task done` closes executions for the selected task only. Executions in the current CLI session become `finished`; executions in other sessions become `abandoned`. Executions for other tasks in the same session remain untouched.
@@ -129,7 +133,7 @@ Resource commands are scoped to the current repository when run inside a Git che
 
 Use `--json FIELD,...` to select machine-readable fields and `--jq EXPRESSION` to filter that JSON with the installed `jq` command. Pass `--json` without a value to list the available fields for a resource.
 
-`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and records the discovering session run and checkout without creating task relationships. GitHub lookup failures stop the command before any database writes.
+`wr sync` checks the current checkout and every checkout with an active execution in the current CLI session. It uses `gh` to find one open pull request for each checked-out branch and records the discovering session run and checkout without creating task relationships. GitHub lookup failures stop the command before any database writes. Use `wr pr sync` when only GitHub pull request states need refreshing.
 
 `wr session list` lists stable CLI sessions such as `codex:<thread-id>` and `claude:<session-id>`. `wr run list` lists their individual SessionRuns. Relationship filters traverse stored Run-to-Checkout and Execution relationships, so no GitHub or Linear network lookup is performed.
 

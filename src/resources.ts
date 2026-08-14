@@ -80,6 +80,7 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
     "url",
     "headBranch",
     "baseBranch",
+    "state",
     "parentPrId",
     "parentNumber",
     "createdAt",
@@ -114,7 +115,7 @@ export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
   checkouts: ["repoRoot", "worktreePath", "branch"],
   executions: ["id", "linearIssueId", "session", "status", "worktreePath"],
   links: ["linearIssueId", "kind", "ref", "worktreePath"],
-  prs: ["repo", "number", "linearIssueId", "headBranch", "baseBranch", "url"],
+  prs: ["repo", "number", "state", "linearIssueId", "headBranch", "baseBranch", "url"],
   branches: ["repoRoot", "branch", "worktreePath"],
   terminals: ["terminalId", "session", "runId", "status", "pane", "lastSeenAt"],
   repos: [
@@ -146,7 +147,7 @@ const RELATIONSHIPS = `WITH relationships AS (
     gc.id AS checkoutId, gc.repo_root AS repoRoot, gc.worktree_path AS worktreePath,
     gc.branch AS branch, gc.created_at AS checkoutCreatedAt,
     pr.id AS prId, pr.repo AS prRepo, pr.number AS prNumber, pr.url AS prUrl,
-    pr.head_branch AS headBranch, pr.base_branch AS baseBranch,
+    pr.head_branch AS headBranch, pr.base_branch AS baseBranch, pr.state AS prState,
     pr.parent_pr_id AS parentPrId, parent.number AS parentNumber, pr.created_at AS prCreatedAt,
     tl.id AS linkId, tl.kind AS linkKind, tl.ref AS linkRef, tl.created_at AS linkCreatedAt
   FROM cli_sessions cs
@@ -168,7 +169,7 @@ const RELATIONSHIPS = `WITH relationships AS (
     CASE WHEN sr.ended_at IS NULL THEN 'active' ELSE 'ended' END,
     NULL, NULL, NULL, NULL, NULL,
     gc.id, gc.repo_root, gc.worktree_path, gc.branch, gc.created_at,
-    pr.id, pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch,
+    pr.id, pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch, pr.state,
     pr.parent_pr_id, parent.number, pr.created_at,
     NULL, NULL, NULL, NULL
   FROM cli_sessions cs
@@ -188,7 +189,7 @@ const RELATIONSHIPS = `WITH relationships AS (
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL,
     gc.id, gc.repo_root, gc.worktree_path, gc.branch, gc.created_at,
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     tl.id, tl.kind, tl.ref, tl.created_at
   FROM task_links tl
   LEFT JOIN tasks t ON t.id = tl.task_id
@@ -252,7 +253,7 @@ function baseQuery(resource: ResourceName): string {
                ORDER BY tl.created_at DESC`;
     case "prs":
       return `SELECT pr.id, pr.repo, pr.number, pr.url, pr.head_branch AS headBranch,
-                     pr.base_branch AS baseBranch, pr.parent_pr_id AS parentPrId,
+                     pr.base_branch AS baseBranch, pr.state, pr.parent_pr_id AS parentPrId,
                      parent.number AS parentNumber, pr.created_at AS createdAt,
                      t.linear_issue_id AS linearIssueId
                 FROM pull_requests pr
@@ -300,7 +301,8 @@ function relatedSelect(resource: ResourceName): string {
               linkKind AS kind, linkRef AS ref, linkCreatedAt AS createdAt`;
     case "prs":
       return `prId AS id, prRepo AS repo, prNumber AS number, prUrl AS url,
-              headBranch, baseBranch, parentPrId, parentNumber, prCreatedAt AS createdAt,
+              headBranch, baseBranch, prState AS state, parentPrId, parentNumber,
+              prCreatedAt AS createdAt,
               linearIssueId`;
     case "branches":
       return `repoRoot, branch, worktreePath`;
@@ -422,7 +424,8 @@ export function queryResource(
     rows = v.parse(RecordListSchema, db.query(baseQuery(resource)).all());
   }
 
-  if (filters.status) rows = rows.filter((row) => row.status === filters.status);
+  if (filters.status)
+    rows = rows.filter((row) => row[resource === "prs" ? "state" : "status"] === filters.status);
   if (filters.kind) rows = rows.filter((row) => row.kind === filters.kind);
   if (resource === "terminals") {
     rows = rows.map((row) => ({

@@ -28,7 +28,13 @@ export const PullRequestSchema = v.object({
   url: v.pipe(v.string(), v.url()),
   headRefName: NonEmptyStringSchema,
   baseRefName: NonEmptyStringSchema,
+  state: v.pipe(
+    v.picklist(["OPEN", "CLOSED", "MERGED"]),
+    v.transform((state) => state.toLowerCase() as "open" | "closed" | "merged"),
+  ),
 });
+
+export const PullRequestStateSchema = v.picklist(["open", "closed", "merged"]);
 
 export const PullRequestListSchema = v.array(PullRequestSchema);
 

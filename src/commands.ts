@@ -13,6 +13,7 @@ import {
   NonEmptyStringSchema,
   PullRequestListSchema,
   PullRequestSchema,
+  PullRequestStateSchema,
   RepositorySchema,
   TaskStatusSchema,
   type PullRequestData,
@@ -39,6 +40,7 @@ const ShowPullRequestSchema = v.object({
   url: v.nullable(v.string()),
   head_branch: v.nullable(v.string()),
   base_branch: v.nullable(v.string()),
+  state: v.nullable(PullRequestStateSchema),
   parent_number: v.nullable(DbIntegerSchema),
 });
 const ShowLinkSchema = v.object({ kind: NonEmptyStringSchema, ref: NonEmptyStringSchema });
@@ -234,7 +236,15 @@ function runGh(args: string[], cwd?: string): string {
 
 function loadPullRequest(repo: string, number: number, cwd?: string): PullRequestData {
   const raw = runGh(
-    ["pr", "view", String(number), "--repo", repo, "--json", "number,url,headRefName,baseRefName"],
+    [
+      "pr",
+      "view",
+      String(number),
+      "--repo",
+      repo,
+      "--json",
+      "number,url,headRefName,baseRefName,state",
+    ],
     cwd,
   );
   try {
@@ -260,25 +270,32 @@ function upsertPullRequest(
   );
   const id = existing?.id ?? newId();
   if (existing) {
-    const params = { id, url: pr.url, head: pr.headRefName, base: pr.baseRefName };
+    const params = {
+      id,
+      url: pr.url,
+      head: pr.headRefName,
+      base: pr.baseRefName,
+      state: pr.state,
+    };
     if (parentId === undefined) {
       db.query(
         `UPDATE pull_requests
-            SET url = $url, head_branch = $head, base_branch = $base
+            SET url = $url, head_branch = $head, base_branch = $base, state = $state
           WHERE id = $id`,
       ).run(params);
     } else {
       db.query(
         `UPDATE pull_requests
-            SET url = $url, head_branch = $head, base_branch = $base,
+            SET url = $url, head_branch = $head, base_branch = $base, state = $state,
                 parent_pr_id = $parentId
           WHERE id = $id`,
       ).run({ ...params, parentId });
     }
   } else {
     db.query(
-      `INSERT INTO pull_requests (id, repo, number, url, head_branch, base_branch, parent_pr_id)
-       VALUES ($id, $repo, $number, $url, $head, $base, $parentId)`,
+      `INSERT INTO pull_requests
+         (id, repo, number, url, head_branch, base_branch, state, parent_pr_id)
+       VALUES ($id, $repo, $number, $url, $head, $base, $state, $parentId)`,
     ).run({
       id,
       repo,
@@ -286,10 +303,33 @@ function upsertPullRequest(
       url: pr.url,
       head: pr.headRefName,
       base: pr.baseRefName,
+      state: pr.state,
       parentId: parentId ?? null,
     });
   }
   return id;
+}
+
+export function syncPullRequestStates(db: Database, all: boolean): { pullRequests: number } {
+  const rows = v.parse(
+    v.array(v.object({ repo: NonEmptyStringSchema, number: DbIntegerSchema })),
+    db
+      .query(
+        `SELECT repo, number
+           FROM pull_requests
+          ${all ? "" : "WHERE state IS NULL OR state = 'open'"}
+          ORDER BY repo, number`,
+      )
+      .all(),
+  );
+  const pullRequests = rows.map((row) => ({
+    repo: row.repo,
+    pr: loadPullRequest(row.repo, row.number),
+  }));
+  db.transaction(() => {
+    for (const item of pullRequests) upsertPullRequest(db, item.repo, item.pr, undefined);
+  }).immediate();
+  return { pullRequests: pullRequests.length };
 }
 
 export function removePullRequest(
@@ -382,7 +422,7 @@ export function syncPullRequests(
         "--state",
         "open",
         "--json",
-        "number,url,headRefName,baseRefName",
+        "number,url,headRefName,baseRefName,state",
       ],
       checkout.worktreePath,
     );
@@ -581,7 +621,7 @@ export function show(
       v.array(ShowPullRequestSchema),
       db
         .query(
-          `SELECT pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch,
+          `SELECT pr.repo, pr.number, pr.url, pr.head_branch, pr.base_branch, pr.state,
                   parent.number AS parent_number
              FROM task_pull_requests tpr JOIN pull_requests pr ON pr.id = tpr.pull_request_id
              LEFT JOIN pull_requests parent ON parent.id = pr.parent_pr_id
@@ -615,6 +655,7 @@ export function show(
           url: pullRequest.url,
           headBranch: pullRequest.head_branch,
           baseBranch: pullRequest.base_branch,
+          state: pullRequest.state,
           parentNumber: pullRequest.parent_number,
         })),
         links: task.links,

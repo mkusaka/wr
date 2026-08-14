@@ -5,7 +5,7 @@ import * as v from "valibot";
 import schema from "./schema.sql" with { type: "text" };
 import { CountRowSchema, DbIntegerSchema, NonEmptyStringSchema } from "./validation.ts";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export function defaultDbPath(env: NodeJS.ProcessEnv = process.env): string {
   const dataHome = env.XDG_DATA_HOME || (env.HOME ? join(env.HOME, ".local", "share") : undefined);

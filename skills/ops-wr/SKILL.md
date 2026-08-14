@@ -105,10 +105,12 @@ wr pr add 122
 wr pr add 123 --task MAL-123
 wr pr add 124 --task MAL-124 --parent 123
 wr pr remove 123 --task MAL-123
+wr pr sync
+wr pr sync --all
 wr sync
 ```
 
-`wr pr add` creates a task relationship only when `--task` is provided. It always records the current session run and checkout. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. Sync records session run and checkout relationships without inferring tasks.
+`wr pr add` creates a task relationship only when `--task` is provided. It always records the current session run and checkout. Run `wr pr sync` to refresh GitHub state for registered pull requests without requiring a current session or repository. It checks unknown and open pull requests by default; `--all` also checks closed and merged pull requests. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. That command records session run and checkout relationships without inferring tasks.
 
 Register a workpad:
 

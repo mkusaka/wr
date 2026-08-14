@@ -29,6 +29,7 @@ const cases = [
     args: ["pr", "remove", "-h"],
     expected: "Usage: wr pr remove --task STRING VALUE",
   },
+  { name: "pr sync", args: ["pr", "sync", "--help"], expected: "Usage: wr pr sync" },
   { name: "link", args: ["link", "--help"], expected: "Usage: wr link list" },
   {
     name: "link action",

@@ -23,6 +23,7 @@ import {
   removeWorkpadLink,
   show,
   startTask,
+  syncPullRequestStates,
   syncPullRequests,
 } from "./commands.ts";
 import {
@@ -57,6 +58,7 @@ import {
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
+  PullRequestStateSchema,
   RecordListSchema,
   RepositoryStatusSchema,
   RunStatusSchema,
@@ -126,12 +128,14 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
   try {
     if (resource === "tasks") return v.parse(TaskStatusSchema, value);
     if (resource === "executions") return v.parse(ExecutionStatusSchema, value);
+    if (resource === "prs") return v.parse(PullRequestStateSchema, value);
     if (resource === "runs" || resource === "terminals") return v.parse(RunStatusSchema, value);
     if (resource === "repos") return v.parse(RepositoryStatusSchema, value);
   } catch {
     if (resource === "tasks") throw new Error("--status must be open, active, done, or cancelled");
     if (resource === "executions")
       throw new Error("--status must be active, finished, or abandoned");
+    if (resource === "prs") throw new Error("--status must be open, closed, or merged");
     if (resource === "repos") throw new Error("--status must be active or inactive");
     throw new Error("--status must be active or ended");
   }
@@ -530,6 +534,14 @@ const commandParser = or(
         }),
         { description: message`Remove a task relationship from a pull request.` },
       ),
+      command(
+        "sync",
+        object({
+          action: constant("pr-sync"),
+          all: option("--all", { description: message`Include closed and merged pull requests.` }),
+        }),
+        { description: message`Synchronize registered pull request states.` },
+      ),
     ),
     { description: message`Manage pull requests.` },
   ),
@@ -842,6 +854,12 @@ try {
       withDb((db) => {
         const result = removePullRequest(db, cli.number, cli.task);
         console.log(`removed ${result.repo}#${cli.number} task=${result.issue}`);
+      });
+      break;
+    case "pr-sync":
+      withDb((db) => {
+        const result = syncPullRequestStates(db, cli.all);
+        console.log(`synced prs=${result.pullRequests}`);
       });
       break;
     case "link-list":

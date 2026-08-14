@@ -27,8 +27,8 @@ function relatedRecords() {
   ).run({ taskId: task.id, checkoutId: current.checkoutId });
   db.query(
     `INSERT INTO pull_requests
-       (id, repo, number, url, head_branch, base_branch)
-     VALUES ('pr-1', 'owner/repo', 123, 'https://example.test/123', 'feature', 'main')`,
+       (id, repo, number, url, head_branch, base_branch, state)
+     VALUES ('pr-1', 'owner/repo', 123, 'https://example.test/123', 'feature', 'main', 'open')`,
   ).run();
   db.query(
     `INSERT INTO task_pull_requests (task_id, pull_request_id)
@@ -62,6 +62,8 @@ describe("resource queries", () => {
       "codex:resource-session",
     );
     expect(queryResource(db!, "prs", { task: "MAL-123" })[0]?.linearIssueId).toBe("MAL-123");
+    expect(queryResource(db!, "prs", { status: "open" })[0]?.state).toBe("open");
+    expect(queryResource(db!, "prs", { status: "closed" })).toEqual([]);
   });
 
   test("uses each linked entity as a reverse-lookup origin", () => {
@@ -317,6 +319,21 @@ describe("resource commands", () => {
     expect(JSON.parse(task.stdout.toString())).toEqual([{ linearIssueId: "MAL-123" }]);
     expect(session.exitCode).toBe(0);
     expect(JSON.parse(session.stdout.toString())).toEqual([{ session: "codex:resource-session" }]);
+  });
+
+  test("filters pull requests by GitHub state", () => {
+    relatedRecords();
+    const result = Bun.spawnSync(
+      ["bun", "src/cli.ts", "pr", "list", "--global", "--status", "open", "--json", "state"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, WR_DB_PATH: db!.filename },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual([{ state: "open" }]);
   });
 
   test("accepts --limit and reports repository opt-in", () => {

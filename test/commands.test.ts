@@ -14,6 +14,7 @@ import {
   removeWorkpadLink,
   show,
   startTask,
+  syncPullRequestStates,
   syncPullRequests,
 } from "../src/commands.ts";
 import { enableRepository } from "../src/config.ts";
@@ -285,7 +286,7 @@ describe("task lifecycle", () => {
   test("CLI cancels a task and removes a workpad relationship", () => {
     db = testDb();
     const configHome = tempDir("wr-command-config");
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       CODEX_THREAD_ID: "command-session",
       XDG_CONFIG_HOME: configHome,
@@ -320,6 +321,28 @@ describe("task lifecycle", () => {
 });
 
 describe("PR registration", () => {
+  test("CLI syncs pull request states without a session or repository", () => {
+    const home = tempDir("wr-pr-sync-cli");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      WR_DB_PATH: join(home, "wr.db"),
+    };
+    delete env.CODEX_THREAD_ID;
+    delete env.CLAUDE_SESSION_ID;
+    delete env.WR_CLI_SESSION;
+    const result = Bun.spawnSync(
+      [process.execPath, join(process.cwd(), "src/cli.ts"), "pr", "sync"],
+      {
+        cwd: home,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString().trim()).toBe("synced prs=0");
+  });
+
   test("stores a validated stack and warns about a branch mismatch", () => {
     db = testDb();
     const current = testContext(db);
@@ -332,9 +355,9 @@ describe("PR registration", () => {
 if [ "$1 $2" = "repo view" ]; then
   echo '{"nameWithOwner":"owner/repo"}'
 elif [ "$1 $2 $3" = "pr view 100" ]; then
-  echo '{"number":100,"url":"https://example.test/100","headRefName":"parent-head","baseRefName":"main"}'
+  echo '{"number":100,"url":"https://example.test/100","headRefName":"parent-head","baseRefName":"main","state":"OPEN"}'
 elif [ "$1 $2 $3" = "pr view 101" ]; then
-  echo '{"number":101,"url":"https://example.test/101","headRefName":"child-head","baseRefName":"different-base"}'
+  echo '{"number":101,"url":"https://example.test/101","headRefName":"child-head","baseRefName":"different-base","state":"OPEN"}'
 else
   exit 1
 fi
@@ -395,11 +418,11 @@ fi
 if [ "$1 $2" = "repo view" ]; then
   echo '{"nameWithOwner":"owner/repo"}'
 elif [ "$1 $2 $3" = "pr view 201" ]; then
-  echo '{"number":201,"url":"https://example.test/201","headRefName":"first","baseRefName":"main"}'
+  echo '{"number":201,"url":"https://example.test/201","headRefName":"first","baseRefName":"main","state":"OPEN"}'
 elif [ "$1 $2 $3" = "pr view 202" ]; then
-  echo '{"number":202,"url":"https://example.test/202","headRefName":"second","baseRefName":"main"}'
+  echo '{"number":202,"url":"https://example.test/202","headRefName":"second","baseRefName":"main","state":"OPEN"}'
 elif [ "$1 $2 $3" = "pr view 203" ]; then
-  echo '{"number":203,"url":"https://example.test/203","headRefName":"third","baseRefName":"main"}'
+  echo '{"number":203,"url":"https://example.test/203","headRefName":"third","baseRefName":"main","state":"OPEN"}'
 else
   exit 1
 fi
@@ -455,6 +478,48 @@ fi
     ).toBe(1);
   });
 
+  test("syncs unknown and open pull request states by default, or every state with --all", () => {
+    db = testDb();
+    db.query(
+      `INSERT INTO pull_requests (id, repo, number, state)
+       VALUES ('pr-301', 'owner/repo', 301, NULL),
+              ('pr-302', 'owner/repo', 302, 'open'),
+              ('pr-303', 'owner/repo', 303, 'closed')`,
+    ).run();
+    const bin = tempDir("wr-fake-gh-state-sync");
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/bin/sh
+case "$3" in
+  301) echo '{"number":301,"url":"https://example.test/301","headRefName":"one","baseRefName":"main","state":"MERGED"}' ;;
+  302) echo '{"number":302,"url":"https://example.test/302","headRefName":"two","baseRefName":"main","state":"CLOSED"}' ;;
+  303) echo '{"number":303,"url":"https://example.test/303","headRefName":"three","baseRefName":"main","state":"OPEN"}' ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    chmodSync(gh, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      expect(syncPullRequestStates(db, false)).toEqual({ pullRequests: 2 });
+      expect(db.query("SELECT number, state FROM pull_requests ORDER BY number").all()).toEqual([
+        { number: 301, state: "merged" },
+        { number: 302, state: "closed" },
+        { number: 303, state: "closed" },
+      ]);
+      expect(syncPullRequestStates(db, true)).toEqual({ pullRequests: 3 });
+      expect(db.query("SELECT number, state FROM pull_requests ORDER BY number").all()).toEqual([
+        { number: 301, state: "merged" },
+        { number: 302, state: "closed" },
+        { number: 303, state: "open" },
+      ]);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   test("syncs pull requests for all active checkouts in the current session", () => {
     db = testDb();
     const current = testContext(db, "sync-session");
@@ -486,14 +551,14 @@ if [ "$1 $2" = "repo view" ]; then
   echo '{"nameWithOwner":"owner/repo"}'
 elif [ "$1 $2" = "pr list" ]; then
   if [ -f .sync-second ]; then
-    echo '[{"number":78,"url":"https://example.test/78","headRefName":"feature","baseRefName":"main"}]'
+    echo '[{"number":78,"url":"https://example.test/78","headRefName":"feature","baseRefName":"main","state":"OPEN"}]'
   else
-    echo '[{"number":77,"url":"https://example.test/77","headRefName":"main","baseRefName":"base"}]'
+    echo '[{"number":77,"url":"https://example.test/77","headRefName":"main","baseRefName":"base","state":"OPEN"}]'
   fi
 elif [ "$1 $2 $3" = "pr view 77" ]; then
-  echo '{"number":77,"url":"https://example.test/77","headRefName":"main","baseRefName":"base"}'
+  echo '{"number":77,"url":"https://example.test/77","headRefName":"main","baseRefName":"base","state":"OPEN"}'
 elif [ "$1 $2 $3" = "pr view 78" ]; then
-  echo '{"number":78,"url":"https://example.test/78","headRefName":"feature","baseRefName":"main"}'
+  echo '{"number":78,"url":"https://example.test/78","headRefName":"feature","baseRefName":"main","state":"OPEN"}'
 else
   exit 1
 fi
