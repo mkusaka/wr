@@ -333,7 +333,7 @@ async function runInternal(
   cliValue: string,
 ): Promise<void> {
   const startedAt = performance.now();
-  const operationId = process.env.WR_HOOK_OPERATION_ID ?? crypto.randomUUID();
+  const operationId = crypto.randomUUID();
   const logPath =
     process.env.WR_HOOK_LOG_PATH ??
     join(
@@ -358,44 +358,9 @@ async function runInternal(
     );
   };
 
-  const isWorker = process.env.WR_HOOK_WORKER === "1";
-  if (!isWorker) log("spawned");
+  log("spawned");
   const payloadText = await Bun.stdin.text();
-  if (!isWorker) {
-    log("received");
-    const sourceEntrypoint = !Bun.main.startsWith("/$bunfs/");
-    const child = Bun.spawn(
-      [
-        process.execPath,
-        ...(sourceEntrypoint ? [Bun.main] : []),
-        "internal",
-        action,
-        "--cli",
-        cliValue,
-      ],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, WR_HOOK_OPERATION_ID: operationId, WR_HOOK_WORKER: "1" },
-        stdin: new TextEncoder().encode(payloadText),
-        stdout: "ignore",
-        stderr: "pipe",
-        timeout: 3_000,
-        killSignal: "SIGKILL",
-      },
-    );
-    log("worker-started", { workerPid: child.pid });
-    const stderrPromise = new Response(child.stderr).text();
-    const exitCode = await child.exited;
-    const stderr = (await stderrPromise).trim();
-    if (child.signalCode === "SIGKILL") {
-      log("timeout", { workerPid: child.pid });
-      console.error(`wr hook: timed out after 3s; see ${logPath}`);
-    } else {
-      log("worker-exited", { workerPid: child.pid, exitCode, stderr: stderr || undefined });
-      if (stderr) console.error(stderr);
-    }
-    return;
-  }
+  log("received");
 
   try {
     log("parse-start");

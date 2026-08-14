@@ -98,7 +98,6 @@ test("concurrent session hooks finish and register every session", async () => {
     .split("\n")
     .map((line) => JSON.parse(line) as { phase: string });
   expect(phases.filter(({ phase }) => phase === "completed")).toHaveLength(10);
-  expect(phases.filter(({ phase }) => phase === "timeout")).toHaveLength(0);
 
   const db = openDb(join(dataHome, "wr", "wr.db"));
   try {
@@ -164,45 +163,6 @@ test("session hook logs its start before stdin closes", async () => {
       .filter((phase) => phase === "spawned"),
   ).toHaveLength(1);
 }, 5_000);
-
-test("session hook times out with its blocking phase in the diagnostic log", async () => {
-  const dataHome = tempDir("wr-hook-timeout");
-  const stateHome = tempDir("wr-hook-timeout-state");
-  const env = {
-    ...process.env,
-    XDG_CONFIG_HOME: tempDir("wr-hook-timeout-config"),
-    XDG_DATA_HOME: dataHome,
-    XDG_STATE_HOME: stateHome,
-    TERM_SESSION_ID: "hook-timeout-terminal",
-  };
-  enableRepository(process.cwd(), env);
-  const db = openDb(join(dataHome, "wr", "wr.db"));
-  db.run("BEGIN IMMEDIATE");
-  const child = Bun.spawn([...hookCommand, "internal", "session-event", "--cli", "codex"], {
-    cwd: process.cwd(),
-    env,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  child.stdin.write(
-    JSON.stringify({ session_id: "hook-timeout-session", cwd: process.cwd(), source: "startup" }),
-  );
-  child.stdin.end();
-  const startedAt = performance.now();
-  expect(await child.exited).toBe(0);
-  expect(performance.now() - startedAt).toBeLessThan(4_000);
-  expect(await new Response(child.stderr).text()).toContain("wr hook: timed out after 3s");
-  db.run("ROLLBACK");
-  db.close();
-
-  const phases = readFileSync(join(stateHome, "wr", "hook.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as { phase: string });
-  expect(phases.at(-2)?.phase).toBe("database-write-start");
-  expect(phases.at(-1)?.phase).toBe("timeout");
-}, 10_000);
 
 test("restarting a completed task reports reopen on stderr", async () => {
   const dataHome = tempDir("wr-reopen");
