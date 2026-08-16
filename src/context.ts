@@ -4,7 +4,7 @@ import type { ContextInput, SessionIdentity } from "./api.ts";
 import { discoverCheckout, type Checkout } from "./git.ts";
 import { HookPayloadSchema, SessionIdentitySchema, type HookPayload } from "./validation.ts";
 
-export type Cli = "codex" | "claude";
+export type Cli = "codex" | "claude" | "devin";
 
 export function normalizeStoredPath(path: string, home = process.env.HOME): string {
   if (!home) return path;
@@ -45,6 +45,7 @@ export function findCurrentSession(
   if (env.CODEX_THREAD_ID) return { cli: "codex", externalSessionId: env.CODEX_THREAD_ID };
   if (env.CLAUDE_CODE_SESSION_ID)
     return { cli: "claude", externalSessionId: env.CLAUDE_CODE_SESSION_ID };
+  if (env.DEVIN_SESSION_ID) return { cli: "devin", externalSessionId: env.DEVIN_SESSION_ID };
   if (env.WR_CLI_SESSION) return parseSessionIdentity(env.WR_CLI_SESSION);
   return null;
 }
@@ -52,7 +53,8 @@ export function findCurrentSession(
 function inferCli(env: NodeJS.ProcessEnv): Cli {
   if (env.CODEX_THREAD_ID) return "codex";
   if (env.CLAUDE_CODE_SESSION_ID) return "claude";
-  throw new Error("A CLI prefix is required for --session outside Codex or Claude");
+  if (env.DEVIN_SESSION_ID) return "devin";
+  throw new Error("A CLI prefix is required for --session outside Codex, Claude, or Devin");
 }
 
 export function currentContext(cwd: string, explicitSession?: string): ContextInput {
@@ -82,9 +84,19 @@ export function appendClaudeEnvironment(
   );
 }
 
-export function parseHookPayload(text: string): HookPayload {
+export function parseHookPayload(text: string, defaultCwd?: string): HookPayload {
   try {
-    return v.parse(HookPayloadSchema, JSON.parse(text));
+    const value: unknown = JSON.parse(text);
+    if (
+      defaultCwd &&
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      !("cwd" in value)
+    ) {
+      return v.parse(HookPayloadSchema, { ...value, cwd: defaultCwd });
+    }
+    return v.parse(HookPayloadSchema, value);
   } catch {
     throw new Error("Invalid hook payload");
   }

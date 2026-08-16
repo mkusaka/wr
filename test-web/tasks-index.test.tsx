@@ -230,6 +230,14 @@ describe("TasksIndex", () => {
                 startedAt: "2026-08-15 12:01:00",
                 endedAt: null,
               },
+              {
+                id: "run-devin",
+                cli: "devin",
+                externalSessionId: "session-devin",
+                terminalId: "terminal-devin",
+                startedAt: "2026-08-15 12:02:00",
+                endedAt: null,
+              },
             ],
             checkouts: [],
           }),
@@ -251,14 +259,17 @@ describe("TasksIndex", () => {
       name: "claude --resume session-42",
     });
     const codexResume = screen.getByRole("button", { name: "codex resume session-codex" });
+    const devinResume = screen.getByRole("button", { name: "devin --resume session-devin" });
     const focus = screen.getByRole("button", { name: "wr run focus run-42" });
     fireEvent.click(resume);
     fireEvent.click(codexResume);
+    fireEvent.click(devinResume);
     fireEvent.click(focus);
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("claude --resume session-42");
       expect(writeText).toHaveBeenCalledWith("codex resume session-codex");
+      expect(writeText).toHaveBeenCalledWith("devin --resume session-devin");
       expect(writeText).toHaveBeenCalledWith("wr run focus run-42");
     });
   });

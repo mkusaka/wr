@@ -32,7 +32,7 @@ import {
 } from "./context.ts";
 import { discoverCheckout } from "./git.ts";
 import { renderResource, renderShow } from "./output.ts";
-import { RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
+import { isCurrentResource, RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
 import { WrUi } from "./ui.tsx";
 import {
   CliSchema,
@@ -63,6 +63,7 @@ type ResourceOptions = {
   pr?: number;
   status?: string;
   kind?: string;
+  all?: boolean;
   global?: boolean;
   json?: string | boolean;
   jq?: string;
@@ -117,7 +118,8 @@ function resourceStatus(resource: ResourceName, value: string | undefined): stri
     if (resource === "tasks") return v.parse(TaskStatusSchema, value);
     if (resource === "executions") return v.parse(ExecutionStatusSchema, value);
     if (resource === "prs") return v.parse(PullRequestStateSchema, value);
-    if (resource === "runs" || resource === "terminals") return v.parse(RunStatusSchema, value);
+    if (resource === "sessions" || resource === "runs" || resource === "terminals")
+      return v.parse(RunStatusSchema, value);
     if (resource === "repos") return v.parse(RepositoryStatusSchema, value);
   } catch {
     if (resource === "tasks") throw new Error("--status must be open, active, done, or cancelled");
@@ -163,12 +165,17 @@ function resourceOptions() {
     ),
     status: optional(option("--status", textValue, { description: message`Filter by status.` })),
     kind: optional(option("--kind", textValue, { description: message`Filter links by kind.` })),
+    all: option("--all", { description: message`Include all devices and historical records.` }),
+    // TODO: Remove after callers migrate to `--all`; this also keeps the old
+    // repository-wide listing flag working during the transition.
+    global: option("--global", {
+      description: message`Include all repositories, devices, and historical records.`,
+    }),
     limit: optional(
       option("--limit", positiveIntegerValue, {
         description: message`Limit the number of records.`,
       }),
     ),
-    global: option("--global", { description: message`Do not infer repository scope from cwd.` }),
     json: optional(
       or(
         option("--json", optiqueString({ metavar: "FIELDS" }), {
@@ -193,6 +200,7 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
   if (values.kind !== undefined && resource !== "links")
     throw new Error(`--kind is not supported by ${resource}`);
 
+  const all = values.all || values.global;
   const worktree = values.worktree ? discoverCheckout(values.worktree, true)! : undefined;
   const repo = values.repo ? discoverCheckout(values.repo, true)! : undefined;
   const repoRoot = values.global
@@ -206,7 +214,7 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
       : resource === "prs"
         ? "/api/pull-requests"
         : `/api/device/resources/${resource}`;
-  const path = `${endpoint}${values.global ? "?global=true" : ""}`;
+  const path = `${endpoint}${all ? "?all=true" : ""}`;
   let rows = await client().request<Array<Record<string, unknown>>>(path);
   const status = resourceStatus(resource, values.status);
   rows = rows.filter((row) => {
@@ -227,6 +235,7 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
       (!values.branch || row.branch === values.branch || row.headBranch === values.branch) &&
       (!values.pr || row.number === values.pr) &&
       (!status || row.status === status || row.state === status) &&
+      (all || values.status !== undefined || isCurrentResource(resource, row)) &&
       (!values.kind || row.kind === values.kind)
     );
   });
@@ -299,13 +308,22 @@ async function runDoctor(): Promise<void> {
       "settings.json",
     );
     const codexPath = join(process.env.CODEX_HOME ?? join(home, ".codex"), "hooks.json");
+    const devinPaths = [
+      join(home, ".config", "devin", "config.json"),
+      join(process.cwd(), ".devin", "hooks.v1.json"),
+      join(process.cwd(), ".devin", "config.json"),
+    ];
     const claude = existsSync(claudePath) ? readFileSync(claudePath, "utf8") : "";
     const codex = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : "";
+    const devin = devinPaths
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
     lines.push(
-      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-prompt --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-prompt --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"}`,
+      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-prompt --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-prompt --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"} devin=${devin.includes("wr internal session-event --cli devin") && devin.includes("wr internal session-prompt --cli devin") && devin.includes("wr internal session-end --cli devin") ? "configured" : "missing"}`,
     );
   } else {
-    lines.push("hooks claude=unknown codex=unknown");
+    lines.push("hooks claude=unknown codex=unknown devin=unknown");
   }
   console.log(lines.join("\n"));
 }
@@ -364,9 +382,12 @@ async function runInternal(
   try {
     log("parse-start");
     const result = v.safeParse(CliSchema, cliValue);
-    if (!result.success) throw new Error("--cli must be codex or claude");
+    if (!result.success) throw new Error("--cli must be codex, claude, or devin");
     const cli: Cli = result.output;
-    const payload = parseHookPayload(payloadText);
+    const payload = parseHookPayload(
+      payloadText,
+      cli === "devin" ? process.env.DEVIN_PROJECT_DIR : undefined,
+    );
     log("parse-completed", { source: payload.source });
     if (action !== "session-end") {
       log("repository-check-start");

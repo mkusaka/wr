@@ -18,6 +18,7 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
     "cli",
     "externalSessionId",
     "initialPrompt",
+    "status",
     "createdAt",
     "updatedAt",
   ],
@@ -66,7 +67,7 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
 
 export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
   tasks: ["linearIssueId", "status", "title", "updatedAt"],
-  sessions: ["session", "id", "createdAt"],
+  sessions: ["session", "id", "status", "createdAt"],
   runs: ["id", "session", "status", "itermSessionId", "lastSeenAt"],
   checkouts: ["repoRoot", "worktreePath", "branch"],
   executions: ["id", "linearIssueId", "session", "status", "worktreePath"],
@@ -76,3 +77,12 @@ export const DEFAULT_FIELDS: Record<ResourceName, string[]> = {
   terminals: ["terminalId", "session", "runId", "status", "pane", "lastSeenAt"],
   repos: ["repoRoot", "enabled", "worktreeCount", "updatedAt"],
 };
+
+export function isCurrentResource(resource: ResourceName, row: Record<string, unknown>): boolean {
+  if (resource === "tasks") return row.status === "open" || row.status === "active";
+  if (resource === "prs") return row.state === "open";
+  if (resource === "sessions" || resource === "runs" || resource === "terminals")
+    return row.status === "active";
+  if (resource === "executions") return row.status === "active";
+  return true;
+}

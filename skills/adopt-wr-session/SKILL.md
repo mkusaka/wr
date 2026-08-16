@@ -1,6 +1,6 @@
 ---
 name: adopt-wr-session
-description: Reconstruct the wr relationship ledger for an already-running Codex or Claude session from the agent's remembered context. Use when hooks were installed after a session started, when an existing agent must register all remembered tasks, worktrees, executions, pull requests, stack parents, and workpads, or when handing off a session that was not tracked from startup.
+description: Reconstruct the wr relationship ledger for an already-running Codex, Claude, or Devin session from the agent's remembered context. Use when hooks were installed after a session started, when an existing agent must register all remembered tasks, worktrees, executions, pull requests, stack parents, and workpads, or when handing off a session that was not tracked from startup.
 ---
 
 # Adopt an existing wr session
@@ -40,7 +40,7 @@ wr show
 wr show --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
-`wr show` creates or repairs the CLI session, SessionRun, and current Git checkout. The value passed to `--session` is the raw Codex thread ID or Claude session ID; do not add a CLI prefix.
+`wr show` creates or repairs the CLI session, SessionRun, and current Git checkout. The value passed to `--session` is the raw Codex thread ID or Claude session ID when that CLI can be inferred. For Devin, pass the explicit `devin:<session-id>` form.
 
 If `CLAUDE_CODE_SESSION_ID` is empty, or automatic discovery conflicts with the explicit ID, stop and report the condition. Do not inspect transcript storage or force an identity.
 

@@ -52,7 +52,7 @@ export type Task = {
 
 export type Run = {
   id: string;
-  cli: "codex" | "claude";
+  cli: "codex" | "claude" | "devin";
   externalSessionId: string;
   terminalId: string | null;
   startedCwd: string | null;
@@ -137,7 +137,7 @@ type TaskRelationships = {
     id: string;
     status: "active" | "finished" | "abandoned";
     sessionRunId: string | null;
-    cli: "codex" | "claude";
+    cli: "codex" | "claude" | "devin";
     externalSessionId: string;
     worktreePath: string | null;
     branch: string | null;
@@ -165,7 +165,7 @@ type PullRequestRelationships = {
   tasks: Array<{ issueId: string; title: string | null; status: Task["status"] }>;
   runs: Array<{
     id: string;
-    cli: "codex" | "claude";
+    cli: "codex" | "claude" | "devin";
     externalSessionId: string;
     terminalId: string | null;
     startedAt: string;
@@ -724,7 +724,9 @@ export default function TasksIndex({
                         command={
                           run.cli === "codex"
                             ? `codex resume ${run.externalSessionId}`
-                            : `claude --resume ${run.externalSessionId}`
+                            : run.cli === "devin"
+                              ? `devin --resume ${run.externalSessionId}`
+                              : `claude --resume ${run.externalSessionId}`
                         }
                       />
                       {run.terminalId ? <CopyCommand command={`wr run focus ${run.id}`} /> : null}
@@ -826,7 +828,9 @@ export default function TasksIndex({
                                         command={
                                           execution.cli === "codex"
                                             ? `codex resume ${execution.externalSessionId}`
-                                            : `claude --resume ${execution.externalSessionId}`
+                                            : execution.cli === "devin"
+                                              ? `devin --resume ${execution.externalSessionId}`
+                                              : `claude --resume ${execution.externalSessionId}`
                                         }
                                       />
                                       {execution.sessionRunId ? (
@@ -1021,7 +1025,9 @@ export default function TasksIndex({
                                         command={
                                           run.cli === "codex"
                                             ? `codex resume ${run.externalSessionId}`
-                                            : `claude --resume ${run.externalSessionId}`
+                                            : run.cli === "devin"
+                                              ? `devin --resume ${run.externalSessionId}`
+                                              : `claude --resume ${run.externalSessionId}`
                                         }
                                       />
                                       <CopyCommand command={`wr run focus ${run.id}`} />

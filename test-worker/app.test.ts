@@ -255,7 +255,7 @@ describe("wr Worker API", () => {
     expect(page.props.pullRequests.map((pullRequest) => pullRequest.number)).toEqual([2, 1]);
   });
 
-  test("shares tasks and isolates sessions by device", async () => {
+  test("scopes resource lists to the current device by default", async () => {
     const payload = { session_id: "session-a", cwd: "/src/example", source: "startup" };
     expect(
       (await request("/api/session-events", "device-a", { cli: "codex", payload, checkout }))
@@ -268,7 +268,12 @@ describe("wr Worker API", () => {
     const tasks = await (
       await request("/api/tasks", "device-b")
     ).json<Array<{ linearIssueId: string }>>();
-    expect(tasks.map((task) => task.linearIssueId)).toEqual(["MOQ-1"]);
+    expect(tasks).toHaveLength(0);
+
+    const allTasks = await (
+      await request("/api/tasks?all=true", "device-b")
+    ).json<Array<{ linearIssueId: string }>>();
+    expect(allTasks.map((task) => task.linearIssueId)).toEqual(["MOQ-1"]);
 
     const deviceASessions = await (
       await request("/api/device/resources/sessions", "device-a")
@@ -277,7 +282,12 @@ describe("wr Worker API", () => {
       await request("/api/device/resources/sessions", "device-b")
     ).json<unknown[]>();
     expect(deviceASessions).toHaveLength(1);
-    expect(deviceBSessions).toHaveLength(1);
+    expect(deviceBSessions).toHaveLength(0);
+    expect(
+      await (
+        await request("/api/device/resources/sessions?all=true", "device-b")
+      ).json<unknown[]>(),
+    ).toHaveLength(1);
   });
 
   test("stores the first prompt even when it arrives before session start", async () => {
@@ -306,6 +316,47 @@ describe("wr Worker API", () => {
       .where(eq(schema.cliSessions.externalSessionId, payload.session_id))
       .get();
     expect(session?.initialPrompt).toBe(payload.prompt);
+  });
+
+  test("records Devin lifecycle events and prompts", async () => {
+    const payload = {
+      session_id: "devin-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    expect(
+      (
+        await request("/api/session-events", "devin-device", {
+          cli: "devin",
+          payload,
+          checkout,
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request("/api/session-prompts", "devin-device", {
+          cli: "devin",
+          payload: { ...payload, prompt: "Track this Devin session" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await request("/api/session-ends", "devin-device", {
+          cli: "devin",
+          payload,
+        })
+      ).status,
+    ).toBe(200);
+
+    const db = drizzle((env as unknown as Env).DB, { schema });
+    const session = await db
+      .select({ cli: schema.cliSessions.cli, initialPrompt: schema.cliSessions.initialPrompt })
+      .from(schema.cliSessions)
+      .where(eq(schema.cliSessions.externalSessionId, payload.session_id))
+      .get();
+    expect(session).toEqual({ cli: "devin", initialPrompt: "Track this Devin session" });
   });
 
   test("sorts sessions by updated time descending", async () => {
@@ -394,7 +445,11 @@ describe("wr Worker API", () => {
     });
     expect(runs.find((run) => run.id === liveRun.runId)?.status).toBe("active");
     expect(runs.find((run) => run.id === terminalLessRun.runId)?.status).toBe("active");
-    expect(runs.find((run) => run.id === otherDeviceRun.runId)?.status).toBe("active");
+    expect(runs.find((run) => run.id === otherDeviceRun.runId)).toBeUndefined();
+    const allRuns = await (
+      await request("/api/device/resources/runs?all=true", "sync-device")
+    ).json<Array<{ id: string; status: string }>>();
+    expect(allRuns.find((run) => run.id === otherDeviceRun.runId)?.status).toBe("active");
   });
 
   test("records task execution and focus targets from session start", async () => {
@@ -646,6 +701,9 @@ describe("wr Worker API", () => {
     expect((await request("/", "user")).status).toBe(200);
     await expect(
       (await request("/api/device/resources/sessions", "device-b")).json<unknown[]>(),
+    ).resolves.toHaveLength(0);
+    await expect(
+      (await request("/api/device/resources/sessions?all=true", "device-b")).json<unknown[]>(),
     ).resolves.toHaveLength(1);
     await expect(
       (
@@ -668,6 +726,11 @@ describe("wr Worker API", () => {
           "other",
         )
       ).json<unknown[]>(),
+    ).resolves.toHaveLength(0);
+    await expect(
+      (await request("/api/tasks", "other-device", undefined, undefined, "other")).json<
+        unknown[]
+      >(),
     ).resolves.toHaveLength(0);
   });
 

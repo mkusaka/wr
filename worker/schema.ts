@@ -65,7 +65,7 @@ export const cliSessions = sqliteTable(
     deviceId: text("device_id")
       .notNull()
       .references(() => devices.id),
-    cli: text({ enum: ["codex", "claude"] }).notNull(),
+    cli: text({ enum: ["codex", "claude", "devin"] }).notNull(),
     externalSessionId: text("external_session_id").notNull(),
     initialPrompt: text("initial_prompt"),
     ...timestamps,
@@ -77,7 +77,7 @@ export const cliSessions = sqliteTable(
       table.cli,
       table.externalSessionId,
     ),
-    check("cli_sessions_cli_check", sql`${table.cli} IN ('codex','claude')`),
+    check("cli_sessions_cli_check", sql`${table.cli} IN ('codex','claude','devin')`),
   ],
 );
 

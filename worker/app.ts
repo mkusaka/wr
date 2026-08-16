@@ -12,7 +12,12 @@ import {
   type CheckoutInput,
   type ContextInput,
 } from "../src/api.ts";
-import { HookPayloadSchema, NonEmptyStringSchema, TaskStatusSchema } from "../src/validation.ts";
+import {
+  CliSchema,
+  HookPayloadSchema,
+  NonEmptyStringSchema,
+  TaskStatusSchema,
+} from "../src/validation.ts";
 import { authenticateAccess, type Env, type Principal } from "./auth.ts";
 import * as schema from "./schema.ts";
 import { rootView } from "./root-view.tsx";
@@ -68,6 +73,50 @@ async function ensureDevice(db: Database, userId: string, deviceId: string, name
 
 function deviceScope(column: AnySQLiteColumn, userId: string): SQL {
   return sql`${column} IN (SELECT ${schema.devices.id} FROM ${schema.devices} WHERE ${schema.devices.userId} = ${userId})`;
+}
+
+function visibleDeviceIds(userId: string, deviceId: string | undefined, all: boolean): SQL {
+  return all || !deviceId
+    ? sql`SELECT ${schema.devices.id} FROM ${schema.devices} WHERE ${schema.devices.userId} = ${userId}`
+    : sql`SELECT ${schema.devices.id} FROM ${schema.devices} WHERE ${schema.devices.userId} = ${userId} AND ${schema.devices.id} = ${deviceId}`;
+}
+
+function scopedDevice(
+  column: AnySQLiteColumn,
+  userId: string,
+  deviceId: string | undefined,
+  all: boolean,
+): SQL {
+  return all || !deviceId ? deviceScope(column, userId) : eq(column, deviceId);
+}
+
+function taskScope(userId: string, deviceId: string | undefined, all: boolean): SQL {
+  const devices = visibleDeviceIds(userId, deviceId, all);
+  return sql`(
+    ${schema.tasks.createdByDeviceId} IN (${devices})
+    OR EXISTS (
+      SELECT 1 FROM executions e
+      WHERE e.task_id = ${schema.tasks.id}
+        AND e.device_id IN (${devices})
+    )
+    OR EXISTS (
+      SELECT 1 FROM workpad_links w
+      WHERE w.task_id = ${schema.tasks.id}
+        AND w.device_id IN (${devices})
+    )
+  )`;
+}
+
+function pullRequestScope(userId: string, deviceId: string | undefined, all: boolean): SQL {
+  const devices = visibleDeviceIds(userId, deviceId, all);
+  return sql`(
+    ${schema.pullRequests.createdByDeviceId} IN (${devices})
+    OR EXISTS (
+      SELECT 1 FROM session_run_pull_requests srp
+      WHERE srp.pull_request_id = ${schema.pullRequests.id}
+        AND srp.device_id IN (${devices})
+    )
+  )`;
 }
 
 async function ensureSession(db: Database, deviceId: string, session: ContextInput["session"]) {
@@ -285,6 +334,9 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
   app.get("/api/tasks", async (c) => {
     const db = drizzle(c.env.DB, { schema });
     const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    const all = c.req.query("all") === "true" || c.req.query("global") === "true";
+    const devices = visibleDeviceIds(userId, deviceId, all);
     const status = v.parse(v.optional(TaskStatusSchema), c.req.query("status"));
     return c.json(
       decodeLocations(
@@ -299,27 +351,32 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             select distinct c.repo_root as repo_root
             from executions e join checkouts c on c.id = e.checkout_id
             where e.task_id = ${sql.raw('"tasks"."id"')}
-              and e.device_id in (select id from devices where user_id = ${userId})
+              and e.device_id in (${devices})
             union
             select distinct c.repo_root as repo_root
             from workpad_links w join checkouts c on c.id = w.checkout_id
             where w.task_id = ${sql.raw('"tasks"."id"')}
-              and w.device_id in (select id from devices where user_id = ${userId})
+              and w.device_id in (${devices})
           )), '[]')`,
             worktreePaths: sql<string>`coalesce((select json_group_array(worktree_path) from (
             select distinct c.worktree_path as worktree_path
             from executions e join checkouts c on c.id = e.checkout_id
             where e.task_id = ${sql.raw('"tasks"."id"')}
-              and e.device_id in (select id from devices where user_id = ${userId})
+              and e.device_id in (${devices})
             union
             select distinct c.worktree_path as worktree_path
             from workpad_links w join checkouts c on c.id = w.checkout_id
             where w.task_id = ${sql.raw('"tasks"."id"')}
-              and w.device_id in (select id from devices where user_id = ${userId})
+              and w.device_id in (${devices})
           )), '[]')`,
           })
           .from(schema.tasks)
-          .where(status ? eq(schema.tasks.status, status) : undefined)
+          .where(
+            and(
+              taskScope(userId, deviceId, all),
+              status ? eq(schema.tasks.status, status) : undefined,
+            ),
+          )
           .orderBy(desc(schema.tasks.updatedAt), schema.tasks.issueId),
       ),
     );
@@ -479,7 +536,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const deviceId = requireDevice(c.get("deviceId"));
     const db = drizzle(c.env.DB, { schema });
     const value = await requestBody(c);
-    const cli = v.parse(v.picklist(["codex", "claude"]), value.cli);
+    const cli = v.parse(CliSchema, value.cli);
     const payload = v.parse(HookPayloadSchema, value.payload);
     const terminalId = v.parse(v.optional(v.string()), value.terminalId);
     const checkout = v.parse(v.nullable(CheckoutInputSchema), value.checkout ?? null);
@@ -573,7 +630,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const deviceId = requireDevice(c.get("deviceId"));
     const db = drizzle(c.env.DB, { schema });
     const value = await requestBody(c);
-    const cli = v.parse(v.picklist(["codex", "claude"]), value.cli);
+    const cli = v.parse(CliSchema, value.cli);
     const payload = v.parse(HookPayloadSchema, value.payload);
     if (!payload.prompt) return c.json({ message: "prompt is required" }, 400);
     await db
@@ -604,7 +661,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const deviceId = requireDevice(c.get("deviceId"));
     const db = drizzle(c.env.DB, { schema });
     const value = await requestBody(c);
-    const cli = v.parse(v.picklist(["codex", "claude"]), value.cli);
+    const cli = v.parse(CliSchema, value.cli);
     const payload = v.parse(HookPayloadSchema, value.payload);
     const run = await db
       .select({ id: schema.sessionRuns.id })
@@ -885,6 +942,9 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
   app.get("/api/pull-requests", async (c) => {
     const db = drizzle(c.env.DB, { schema });
     const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    const all = c.req.query("all") === "true" || c.req.query("global") === "true";
+    const devices = visibleDeviceIds(userId, deviceId, all);
     const parentPullRequests = alias(schema.pullRequests, "parent_pull_requests");
     return c.json(
       decodeLocations(
@@ -903,13 +963,13 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             select distinct c.repo_root as repo_root
             from session_run_pull_requests srp join checkouts c on c.id = srp.checkout_id
             where srp.pull_request_id = ${sql.raw('"pull_requests"."id"')}
-              and srp.device_id in (select id from devices where user_id = ${userId})
+              and srp.device_id in (${devices})
           )), '[]')`,
             worktreePaths: sql<string>`coalesce((select json_group_array(worktree_path) from (
             select distinct c.worktree_path as worktree_path
             from session_run_pull_requests srp join checkouts c on c.id = srp.checkout_id
             where srp.pull_request_id = ${sql.raw('"pull_requests"."id"')}
-              and srp.device_id in (select id from devices where user_id = ${userId})
+              and srp.device_id in (${devices})
           )), '[]')`,
           })
           .from(schema.pullRequests)
@@ -919,6 +979,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           )
           .leftJoin(schema.tasks, eq(schema.tasks.id, schema.taskPullRequests.taskId))
           .leftJoin(parentPullRequests, eq(parentPullRequests.id, schema.pullRequests.parentPrId))
+          .where(pullRequestScope(userId, deviceId, all))
           .groupBy(schema.pullRequests.id)
           .orderBy(desc(schema.pullRequests.createdAt)),
       ),
@@ -1023,6 +1084,9 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
 
   app.get("/api/device/resources/:resource", async (c) => {
     const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
+    const all = c.req.query("all") === "true" || c.req.query("global") === "true";
+    const devices = visibleDeviceIds(userId, deviceId, all);
     const db = drizzle(c.env.DB, { schema });
     switch (c.req.param("resource")) {
       case "sessions":
@@ -1035,6 +1099,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 cli: schema.cliSessions.cli,
                 externalSessionId: schema.cliSessions.externalSessionId,
                 initialPrompt: schema.cliSessions.initialPrompt,
+                status: sql<string>`CASE WHEN EXISTS (
+                  SELECT 1 FROM session_runs sr
+                  WHERE sr.cli_session_id = ${schema.cliSessions.id} AND sr.ended_at IS NULL
+                ) THEN 'active' ELSE 'ended' END`,
                 createdAt: schema.cliSessions.createdAt,
                 updatedAt: sql<string>`coalesce(${schema.cliSessions.updatedAt}, ${schema.cliSessions.createdAt})`,
                 repoRoots: sql<string>`coalesce((select json_group_array(repo_root) from (
@@ -1043,7 +1111,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 join session_run_checkouts src on src.session_run_id = sr.id
                 join checkouts c on c.id = src.checkout_id
                 where sr.cli_session_id = ${sql.raw('"cli_sessions"."id"')}
-                  and sr.device_id in (select id from devices where user_id = ${userId})
+                  and sr.device_id in (${devices})
               )), '[]')`,
                 worktreePaths: sql<string>`coalesce((select json_group_array(worktree_path) from (
                 select distinct c.worktree_path as worktree_path
@@ -1051,11 +1119,11 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 join session_run_checkouts src on src.session_run_id = sr.id
                 join checkouts c on c.id = src.checkout_id
                 where sr.cli_session_id = ${sql.raw('"cli_sessions"."id"')}
-                  and sr.device_id in (select id from devices where user_id = ${userId})
+                  and sr.device_id in (${devices})
               )), '[]')`,
               })
               .from(schema.cliSessions)
-              .where(deviceScope(schema.cliSessions.deviceId, userId))
+              .where(scopedDevice(schema.cliSessions.deviceId, userId, deviceId, all))
               .orderBy(
                 desc(
                   sql`coalesce(${schema.cliSessions.updatedAt}, ${schema.cliSessions.createdAt})`,
@@ -1085,13 +1153,13 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 select distinct c.repo_root as repo_root
                 from session_run_checkouts src join checkouts c on c.id = src.checkout_id
                 where src.session_run_id = ${sql.raw('"session_runs"."id"')}
-                  and src.device_id in (select id from devices where user_id = ${userId})
+                  and src.device_id in (${devices})
               )), '[]')`,
                 worktreePaths: sql<string>`coalesce((select json_group_array(worktree_path) from (
                 select distinct c.worktree_path as worktree_path
                 from session_run_checkouts src join checkouts c on c.id = src.checkout_id
                 where src.session_run_id = ${sql.raw('"session_runs"."id"')}
-                  and src.device_id in (select id from devices where user_id = ${userId})
+                  and src.device_id in (${devices})
               )), '[]')`,
               })
               .from(schema.sessionRuns)
@@ -1101,7 +1169,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               )
               .where(
                 and(
-                  deviceScope(schema.sessionRuns.deviceId, userId),
+                  scopedDevice(schema.sessionRuns.deviceId, userId, deviceId, all),
                   c.req.param("resource") === "terminals"
                     ? sql`${schema.sessionRuns.terminalId} IS NOT NULL`
                     : undefined,
@@ -1124,7 +1192,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             .from(schema.checkouts)
             .where(
               and(
-                deviceScope(schema.checkouts.deviceId, userId),
+                scopedDevice(schema.checkouts.deviceId, userId, deviceId, all),
                 c.req.param("resource") === "branches"
                   ? sql`${schema.checkouts.branch} IS NOT NULL`
                   : undefined,
@@ -1154,7 +1222,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               eq(schema.cliSessions.id, schema.executions.cliSessionId),
             )
             .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.executions.checkoutId))
-            .where(deviceScope(schema.executions.deviceId, userId))
+            .where(scopedDevice(schema.executions.deviceId, userId, deviceId, all))
             .orderBy(desc(schema.executions.startedAt)),
         );
       case "links":
@@ -1172,7 +1240,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             .from(schema.workpadLinks)
             .leftJoin(schema.tasks, eq(schema.tasks.id, schema.workpadLinks.taskId))
             .innerJoin(schema.checkouts, eq(schema.checkouts.id, schema.workpadLinks.checkoutId))
-            .where(deviceScope(schema.workpadLinks.deviceId, userId))
+            .where(scopedDevice(schema.workpadLinks.deviceId, userId, deviceId, all))
             .orderBy(desc(schema.workpadLinks.createdAt)),
         );
       case "repos":
@@ -1184,7 +1252,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               updatedAt: sql<string>`max(${schema.checkouts.createdAt})`,
             })
             .from(schema.checkouts)
-            .where(deviceScope(schema.checkouts.deviceId, userId))
+            .where(scopedDevice(schema.checkouts.deviceId, userId, deviceId, all))
             .groupBy(schema.checkouts.repoRoot)
             .orderBy(desc(sql`max(${schema.checkouts.createdAt})`)),
         );
@@ -1195,6 +1263,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
 
   app.get("/api/focus-targets", async (c) => {
     const userId = c.get("userId");
+    const deviceId = c.get("deviceId");
     const db = drizzle(c.env.DB, { schema });
     const runs = await db
       .select({
@@ -1207,7 +1276,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .innerJoin(schema.cliSessions, eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId))
       .where(
         and(
-          deviceScope(schema.sessionRuns.deviceId, userId),
+          scopedDevice(schema.sessionRuns.deviceId, userId, deviceId, false),
           isNull(schema.sessionRuns.endedAt),
           sql`${schema.sessionRuns.terminalId} IS NOT NULL`,
         ),
