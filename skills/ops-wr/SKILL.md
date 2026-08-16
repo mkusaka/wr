@@ -129,7 +129,7 @@ Workpad references may be existing paths or identifiers such as task IDs. Existi
 
 ## Preserve boundaries
 
-- Do not edit the SQLite database directly.
+- Do not edit the relationship ledger storage directly. Use the `wr` CLI or Worker API.
 - Do not call `wr internal` manually; session hooks own those commands.
 - Do not enable repositories speculatively.
 - Do not infer task dependencies or start workflows.
