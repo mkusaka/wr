@@ -20,6 +20,7 @@ Enable or disable the current repository only when the user has requested that t
 ```bash
 wr config enable .
 wr config disable .
+wr server open
 ```
 
 If the repository is not enabled and the user has not authorized opt-in, report that condition instead of enabling it implicitly. Enabling any linked worktree enables the whole repository.

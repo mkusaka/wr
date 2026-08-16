@@ -67,6 +67,7 @@ Copy the `wrangler_vars` output into the matching values in `wrangler.jsonc`, th
 ```bash
 wr config server https://wr.example.com
 wr config enable .
+wr server open
 ```
 
 The first remote command opens the Access login page. The CLI dynamically registers as a public OAuth client, completes PKCE through a loopback callback, and stores the access and refresh tokens in `~/.config/wr/oauth.json` with owner-only permissions. `WR_SERVER_URL` overrides the configured server URL.

@@ -45,6 +45,7 @@ import {
   RepositorySchema,
   RepositoryStatusSchema,
   RunStatusSchema,
+  ServerUrlSchema,
   TaskStatusSchema,
 } from "./validation.ts";
 
@@ -79,6 +80,15 @@ const positiveIntegerValue = valibot(PositiveIntegerArgumentSchema, { placeholde
 
 function client(): ApiClient {
   return new ApiClient(readConfig());
+}
+
+function openServer(): void {
+  const configuredUrl = process.env.WR_SERVER_URL ?? readConfig().serverUrl;
+  if (!configuredUrl) throw new Error("Server is not configured; run wr config server URL");
+  const serverUrl = v.parse(ServerUrlSchema, configuredUrl);
+  const result = Bun.spawnSync(["open", serverUrl], { stdout: "ignore", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error("Could not open the wr server");
+  console.log(`opened ${serverUrl}`);
 }
 
 function getLiveTerminalIds(): Set<string> | undefined {
@@ -490,33 +500,42 @@ const commandParser = or(
     ),
     { hidden: true },
   ),
-  command(
-    "config",
-    or(
-      command("list", object({ action: constant("config-list") }), {
-        description: message`List enabled repositories.`,
-      }),
-      command(
-        "enable",
-        object({
-          action: constant("config-enable"),
-          path: withDefault(argument(textValue), "."),
+  or(
+    command(
+      "config",
+      or(
+        command("list", object({ action: constant("config-list") }), {
+          description: message`List enabled repositories.`,
         }),
-        { description: message`Enable a repository.` },
-      ),
-      command(
-        "disable",
-        object({
-          action: constant("config-disable"),
-          path: withDefault(argument(textValue), "."),
+        command(
+          "enable",
+          object({
+            action: constant("config-enable"),
+            path: withDefault(argument(textValue), "."),
+          }),
+          { description: message`Enable a repository.` },
+        ),
+        command(
+          "disable",
+          object({
+            action: constant("config-disable"),
+            path: withDefault(argument(textValue), "."),
+          }),
+          { description: message`Disable a repository.` },
+        ),
+        command("server", object({ action: constant("config-server"), url: argument(textValue) }), {
+          description: message`Set the Worker URL.`,
         }),
-        { description: message`Disable a repository.` },
       ),
-      command("server", object({ action: constant("config-server"), url: argument(textValue) }), {
-        description: message`Set the Worker URL.`,
-      }),
+      { description: message`Manage repository opt-in.` },
     ),
-    { description: message`Manage repository opt-in.` },
+    command(
+      "server",
+      command("open", object({ action: constant("server-open") }), {
+        description: message`Open the configured Worker in a browser.`,
+      }),
+      { description: message`Open the wr server.` },
+    ),
   ),
   command(
     "task",
@@ -882,6 +901,9 @@ try {
     case "config-server":
       setServerUrl(cli.url);
       console.log(`server ${cli.url}`);
+      break;
+    case "server-open":
+      openServer();
       break;
     case "task-list":
       await runResource("tasks", cli);
