@@ -73,7 +73,7 @@ Use `wr run sync` on each Device to end active runs whose recorded iTerm2 sessio
 
 The previous plural resource commands, `wr link workpad REF`, and `wr link remove workpad REF` are temporary compatibility paths. Do not use them in new instructions; migrate existing callers because they will be removed later.
 
-If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value. Use `$adopt-wr-session` for full reconstruction of an already-running session.
+If session discovery fails, pass the existing session ID with `--session`. Do not override a discovered session with a conflicting explicit value. Mutating commands automatically register a discovered session and create an implicit session run and checkout when the context is not registered yet. Commands that name a task also register that task when the operation establishes or updates it, such as `task done`, `task cancel`, `pr add --task`, and `link workpad add --task`. Use `$adopt-wr-session` for full reconstruction of an already-running session with multiple remembered relationships.
 
 ## Track task work
 
@@ -86,7 +86,7 @@ wr task start MAL-123 --title "Task title" --worktree .
 
 Use `wr task add` to register unstarted work with `open` status. It does not require a CLI session and does not create an execution. Repeating it preserves the current status and only updates an explicitly provided title.
 
-Complete only the selected task:
+Complete only the selected task. If the named task is not registered, `wr` registers it before completing it:
 
 ```bash
 wr task done MAL-123
@@ -102,7 +102,7 @@ Starting a completed task reopens it and reports that change. Completing a task 
 
 ## Attach artifacts
 
-Register a GitHub pull request from its checkout. This command calls `gh` and writes nothing if GitHub lookup fails:
+Register a GitHub pull request from its checkout. This command calls `gh`, automatically registers a task named by `--task` when needed, and writes nothing if GitHub lookup fails:
 
 ```bash
 wr pr add 122
@@ -116,7 +116,7 @@ wr sync
 
 `wr pr add` creates a task relationship only when `--task` is provided. It always records the current session run and checkout. Run `wr pr sync` to refresh GitHub state for registered pull requests without requiring a current session or repository. It checks unknown and open pull requests by default; `--all` also checks closed and merged pull requests. After creating, updating, or rebasing pull requests, run `wr sync` before the next user handoff or final report. That command records session run and checkout relationships without inferring tasks.
 
-Register a workpad:
+Register a workpad. A task named by `--task` is registered when needed:
 
 ```bash
 wr link workpad add ./workpad.md

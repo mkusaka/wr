@@ -40,13 +40,13 @@ wr show
 wr show --session "${CLAUDE_CODE_SESSION_ID}"
 ```
 
-`wr show` creates or repairs the CLI session, SessionRun, and current Git checkout. The value passed to `--session` is the raw Codex thread ID or Claude session ID when that CLI can be inferred. For Devin, pass the explicit `devin:<session-id>` form.
+`wr show` reads the current relationships. Mutating commands automatically create a missing CLI session, implicit SessionRun, and current Git checkout from the supplied context. The value passed to `--session` is the raw Codex thread ID or Claude session ID when that CLI can be inferred. For Devin, pass the explicit `devin:<session-id>` form.
 
 If `CLAUDE_CODE_SESSION_ID` is empty, or automatic discovery conflicts with the explicit ID, stop and report the condition. Do not inspect transcript storage or force an identity.
 
 ## Register every remembered relationship
 
-For every remembered task/worktree pair, create the execution in the same session:
+For every remembered task/worktree pair, create the execution in the same session. Missing session and task records are created by these mutating commands when the operation requires them:
 
 ```bash
 wr task start MAL-123 --worktree .
