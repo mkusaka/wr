@@ -1,4 +1,9 @@
+import type { ShowTask } from "./api.ts";
 import { DEFAULT_FIELDS, RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
+
+function terminalText(value: unknown): string {
+  return String(value ?? "-").replace(/\p{Cc}/gu, " ");
+}
 
 function projectRows(
   resource: ResourceName,
@@ -30,7 +35,7 @@ export function renderResource(
             `${status}:`,
             ...tasks.map(
               (task) =>
-                `  ${task.linearIssueId}${task.title ? ` ${task.title}` : ""} updated=${task.updatedAt}`,
+                `  ${terminalText(task.linearIssueId)}${task.title ? ` ${terminalText(task.title)}` : ""} updated=${terminalText(task.updatedAt)}`,
             ),
           ].join("\n");
         })
@@ -40,7 +45,7 @@ export function renderResource(
     return projectRows(resource, rows, DEFAULT_FIELDS[resource])
       .map((row) =>
         Object.entries(row)
-          .map(([key, value]) => `${key}=${value ?? "-"}`)
+          .map(([key, value]) => `${key}=${terminalText(value)}`)
           .join(" "),
       )
       .join("\n");
@@ -68,4 +73,31 @@ export function renderResource(
   if (!result) throw new Error("jq is required for --jq");
   if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || "jq failed");
   return result.stdout.toString().trimEnd();
+}
+
+export function renderShow(tasks: ShowTask[]): string {
+  if (tasks.length === 0) return "No related tasks";
+  return tasks
+    .map((task) => {
+      const lines = [
+        `Task ${terminalText(task.linearIssueId)} [${terminalText(task.status)}]${task.title ? ` ${terminalText(task.title)}` : ""}`,
+      ];
+      for (const execution of task.executions) {
+        const checkout = execution.worktreePath
+          ? ` ${terminalText(execution.worktreePath)}${execution.branch ? ` (${terminalText(execution.branch)})` : ""}`
+          : "";
+        lines.push(
+          `  Execution ${terminalText(execution.status)}: ${terminalText(execution.cli)}:${terminalText(execution.externalSessionId)}${checkout}`,
+        );
+      }
+      for (const pullRequest of task.pullRequests) {
+        lines.push(
+          `  PR ${terminalText(pullRequest.repo)}#${terminalText(pullRequest.number)}${pullRequest.parentNumber ? ` parent=#${terminalText(pullRequest.parentNumber)}` : ""} ${terminalText(pullRequest.url)}`,
+        );
+      }
+      for (const link of task.links)
+        lines.push(`  ${terminalText(link.kind)}: ${terminalText(link.ref)}`);
+      return lines.join("\n");
+    })
+    .join("\n\n");
 }

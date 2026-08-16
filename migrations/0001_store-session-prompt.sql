@@ -1,0 +1,1 @@
+ALTER TABLE `cli_sessions` ADD `initial_prompt` text;

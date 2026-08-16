@@ -13,10 +13,25 @@ export const HookPayloadSchema = v.object({
   session_id: NonEmptyStringSchema,
   cwd: NonEmptyStringSchema,
   source: v.optional(NonEmptyStringSchema),
+  prompt: v.optional(NonEmptyStringSchema),
 });
+
+export const ServerUrlSchema = v.pipe(
+  v.string(),
+  v.url(),
+  v.check((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+    );
+  }, "server URL must use HTTPS unless it targets localhost"),
+);
 
 export const ConfigSchema = v.object({
   repositories: v.array(NonEmptyStringSchema),
+  serverUrl: v.optional(ServerUrlSchema),
+  deviceId: v.optional(NonEmptyStringSchema),
 });
 
 export const RepositorySchema = v.object({
@@ -36,8 +51,6 @@ export const PullRequestSchema = v.object({
 
 export const PullRequestStateSchema = v.picklist(["open", "closed", "merged"]);
 
-export const PullRequestListSchema = v.array(PullRequestSchema);
-
 export const TaskStatusSchema = v.picklist(["open", "active", "done", "cancelled"]);
 
 export const ExecutionStatusSchema = v.picklist(["active", "finished", "abandoned"]);
@@ -50,17 +63,5 @@ export const ITermSessionListSchema = v.array(v.object({ id: NonEmptyStringSchem
 
 export const PositiveIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
-export const DbIntegerSchema = v.pipe(v.number(), v.safeInteger());
-
-export const CountRowSchema = v.object({ count: DbIntegerSchema });
-
-export const IdRowSchema = v.object({ id: NonEmptyStringSchema });
-
-const RecordSchema = v.record(v.string(), v.unknown());
-
-export const RecordListSchema = v.array(RecordSchema);
-
-export type SessionIdentity = v.InferOutput<typeof SessionIdentitySchema>;
 export type HookPayload = v.InferOutput<typeof HookPayloadSchema>;
 export type Config = v.InferOutput<typeof ConfigSchema>;
-export type PullRequestData = v.InferOutput<typeof PullRequestSchema>;

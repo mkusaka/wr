@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-import { Database } from "bun:sqlite";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { object, or } from "@optique/core/constructs";
 import { message } from "@optique/core/message";
@@ -12,54 +11,38 @@ import { valibot } from "@optique/valibot";
 import { render } from "ink";
 import { createElement } from "react";
 import * as v from "valibot";
-import {
-  addPullRequest,
-  addTask,
-  addWorkpadLink,
-  cancelTask,
-  doneTask,
-  findRunTerminal,
-  removePullRequest,
-  removeWorkpadLink,
-  show,
-  startTask,
-  syncPullRequestStates,
-  syncPullRequests,
-} from "./commands.ts";
+import type { FocusTarget, PullRequestInput, ShowTask } from "./api.ts";
+import { ApiClient } from "./client.ts";
 import {
   disableRepository,
   enableRepository,
   isRepositoryEnabled,
   readConfig,
   requireEnabledRepository,
+  setServerUrl,
 } from "./config.ts";
 import {
-  endSession,
+  appendClaudeEnvironment,
+  currentContext,
   findCurrentSession,
+  normalizeStoredCheckout,
+  normalizeStoredPath,
   parseHookPayload,
-  registerSessionEvent,
-  resolveCurrentContext,
   type Cli,
 } from "./context.ts";
-import { defaultDbPath, openDb } from "./db.ts";
 import { discoverCheckout } from "./git.ts";
-import { renderResource } from "./output.ts";
-import {
-  queryResource,
-  RESOURCE_FIELDS,
-  type ResourceFilters,
-  type ResourceName,
-} from "./resources.ts";
-import { queryFocusTargets, WrUi } from "./ui.tsx";
+import { renderResource, renderShow } from "./output.ts";
+import { RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
+import { WrUi } from "./ui.tsx";
 import {
   CliSchema,
-  DbIntegerSchema,
   ExecutionStatusSchema,
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
+  PullRequestSchema,
   PullRequestStateSchema,
-  RecordListSchema,
+  RepositorySchema,
   RepositoryStatusSchema,
   RunStatusSchema,
   TaskStatusSchema,
@@ -94,13 +77,8 @@ const PositiveIntegerArgumentSchema = v.pipe(
 const textValue = valibot(NonEmptyStringSchema, { placeholder: "VALUE" });
 const positiveIntegerValue = valibot(PositiveIntegerArgumentSchema, { placeholder: 1 });
 
-function withDb<T>(callback: (db: Database) => T): T {
-  const db = openDb(process.env.WR_DB_PATH);
-  try {
-    return callback(db);
-  } finally {
-    db.close();
-  }
+function client(): ApiClient {
+  return new ApiClient(readConfig());
 }
 
 function getLiveTerminalIds(): Set<string> | undefined {
@@ -195,7 +173,7 @@ function resourceOptions() {
   };
 }
 
-function runResource(resource: ResourceName, values: ResourceOptions): void {
+async function runResource(resource: ResourceName, values: ResourceOptions): Promise<void> {
   if (values.json === true) {
     if (values.jq) throw new Error("--jq requires --json FIELDS");
     console.log(RESOURCE_FIELDS[resource].join("\n"));
@@ -207,92 +185,95 @@ function runResource(resource: ResourceName, values: ResourceOptions): void {
 
   const worktree = values.worktree ? discoverCheckout(values.worktree, true)! : undefined;
   const repo = values.repo ? discoverCheckout(values.repo, true)! : undefined;
-  const filters: ResourceFilters = {
-    task: values.task,
-    session: values.session,
-    run: values.run,
-    checkout: values.checkout,
-    execution: values.execution,
-    link: values.link,
-    terminal: values.terminal,
-    repoRoot: values.global
-      ? undefined
-      : (repo?.repoRoot ?? worktree?.repoRoot ?? discoverCheckout(process.cwd())?.repoRoot),
-    worktreePath: worktree?.worktreePath,
-    branch: values.branch,
-    pullRequest: values.pr,
-    status: resourceStatus(resource, values.status),
-    kind: values.kind,
-    limit: values.limit,
-  };
-  withDb((db) => {
-    if (isRepositoryEnabled(process.cwd()) && findCurrentSession(db)) {
-      resolveCurrentContext(db, process.cwd());
-    }
-    let rows = queryResource(db, resource, filters);
-    if (resource === "runs" || resource === "terminals") {
-      const live = getLiveTerminalIds();
-      rows = rows.map((row) => ({ ...row, pane: paneStatus(row.itermSessionId, live) }));
-    }
-    if (resource === "repos") {
-      const enabled = new Set(readConfig().repositories);
-      rows = rows.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
-    }
-    console.log(
-      renderResource(
-        resource,
-        rows,
-        typeof values.json === "string" ? values.json : undefined,
-        values.jq,
-      ),
+  const repoRoot = values.global
+    ? undefined
+    : normalizeStoredPath(
+        repo?.repoRoot ?? worktree?.repoRoot ?? discoverCheckout(process.cwd())?.repoRoot ?? "",
+      );
+  const endpoint =
+    resource === "tasks"
+      ? "/api/tasks"
+      : resource === "prs"
+        ? "/api/pull-requests"
+        : `/api/device/resources/${resource}`;
+  const path = `${endpoint}${values.global ? "?global=true" : ""}`;
+  let rows = await client().request<Array<Record<string, unknown>>>(path);
+  const status = resourceStatus(resource, values.status);
+  rows = rows.filter((row) => {
+    const repoRoots = Array.isArray(row.repoRoots) ? row.repoRoots : [];
+    const worktreePaths = Array.isArray(row.worktreePaths) ? row.worktreePaths : [];
+    return (
+      (!values.task || row.linearIssueId === values.task) &&
+      (!values.session || String(row.session ?? "").includes(values.session)) &&
+      (!values.run || row.id === values.run || row.runId === values.run) &&
+      (!values.checkout || row.id === values.checkout || row.checkoutId === values.checkout) &&
+      (!values.execution || row.id === values.execution) &&
+      (!values.link || row.id === values.link) &&
+      (!values.terminal || String(row.itermSessionId ?? "").endsWith(values.terminal)) &&
+      (!repoRoot || row.repoRoot === repoRoot || repoRoots.includes(repoRoot)) &&
+      (!worktree ||
+        row.worktreePath === normalizeStoredPath(worktree.worktreePath) ||
+        worktreePaths.includes(normalizeStoredPath(worktree.worktreePath))) &&
+      (!values.branch || row.branch === values.branch || row.headBranch === values.branch) &&
+      (!values.pr || row.number === values.pr) &&
+      (!status || row.status === status || row.state === status) &&
+      (!values.kind || row.kind === values.kind)
     );
   });
+  if (values.limit) rows = rows.slice(0, values.limit);
+  if (resource === "runs" || resource === "terminals") {
+    const live = getLiveTerminalIds();
+    rows = rows.map((row) => ({
+      ...row,
+      terminalId: String(row.itermSessionId ?? "")
+        .split(":")
+        .at(-1),
+      pane: paneStatus(row.itermSessionId, live),
+    }));
+  }
+  if (resource === "repos") {
+    const enabled = new Set(readConfig().repositories);
+    rows = rows.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
+  }
+  console.log(
+    renderResource(
+      resource,
+      rows,
+      typeof values.json === "string" ? values.json : undefined,
+      values.jq,
+    ),
+  );
 }
 
-function runDoctor(): void {
-  const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
+async function syncSessionRuns(): Promise<void> {
+  const runs = await client().request<
+    Array<{ id: string; status: string; itermSessionId: string | null }>
+  >("/api/device/resources/runs");
+  const liveTerminalIds = getLiveTerminalIds();
+  if (!liveTerminalIds) throw new Error("Could not list iTerm2 sessions");
+  const result = await client().request<{ ended: number }>("/api/runs/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      candidateRunIds: runs
+        .filter((sessionRun) => sessionRun.status === "active" && sessionRun.itermSessionId)
+        .map((sessionRun) => sessionRun.id),
+      liveTerminalIds: [...liveTerminalIds],
+    }),
+  });
+  console.log(`synced runs=${result.ended}`);
+}
+
+async function runDoctor(): Promise<void> {
   const checkout = discoverCheckout(process.cwd());
   const lines: string[] = [];
-  if (!existsSync(dbPath)) {
-    lines.push(`database path=${dbPath} status=missing`);
-    lines.push("session status=not-checked");
-  } else {
-    const db = new Database(dbPath, { readonly: true, strict: true });
-    try {
-      const version = v.parse(
-        v.object({ user_version: DbIntegerSchema }),
-        db.query("PRAGMA user_version").get(),
-      );
-      const quickRows = v.parse(RecordListSchema, db.query("PRAGMA quick_check").all());
-      const quick = quickRows.every((row) => Object.values(row)[0] === "ok") ? "ok" : "failed";
-      const foreignKeyViolations = db.query("PRAGMA foreign_key_check").all().length;
-      lines.push(
-        `database path=${dbPath} status=ok schema=${version.user_version} quick_check=${quick} foreign_key_violations=${foreignKeyViolations}`,
-      );
-      const identity = findCurrentSession(db);
-      if (!identity) {
-        lines.push("session status=not-detected");
-      } else {
-        const row = v.parse(
-          v.nullable(v.object({ id: NonEmptyStringSchema, activeRuns: DbIntegerSchema })),
-          db
-            .query(
-              `SELECT cs.id, COUNT(sr.id) AS activeRuns
-                 FROM cli_sessions cs
-                 LEFT JOIN session_runs sr ON sr.cli_session_id = cs.id AND sr.ended_at IS NULL
-                WHERE cs.cli = $cli AND cs.external_session_id = $externalSessionId
-                GROUP BY cs.id`,
-            )
-            .get(identity),
-        );
-        lines.push(
-          `session identity=${identity.cli}:${identity.externalSessionId} registered=${row ? "yes" : "no"} active_runs=${row?.activeRuns ?? 0}`,
-        );
-      }
-    } finally {
-      db.close();
-    }
-  }
+  const health = await client().request<{ ok: boolean; principal: string }>("/api/health");
+  lines.push(`server status=${health.ok ? "ok" : "failed"} principal=${health.principal}`);
+  const identity = findCurrentSession();
+  lines.push(
+    identity
+      ? `session identity=${identity.cli}:${identity.externalSessionId}`
+      : "session status=not-detected",
+  );
   lines.push(
     checkout
       ? `repository path=${checkout.repoRoot} enabled=${isRepositoryEnabled(process.cwd()) ? "yes" : "no"}`
@@ -311,7 +292,7 @@ function runDoctor(): void {
     const claude = existsSync(claudePath) ? readFileSync(claudePath, "utf8") : "";
     const codex = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : "";
     lines.push(
-      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"}`,
+      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-prompt --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-prompt --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"}`,
     );
   } else {
     lines.push("hooks claude=unknown codex=unknown");
@@ -319,21 +300,25 @@ function runDoctor(): void {
   console.log(lines.join("\n"));
 }
 
-function focusTerminal(target: string, resolveRun: boolean): void {
-  withDb((db) => {
-    const terminalId = resolveRun ? findRunTerminal(db, target) : target.split(":").at(-1)!;
-    const result = Bun.spawnSync(["it2", "session", "focus", terminalId], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (result.exitCode !== 0)
-      throw new Error(result.stderr.toString().trim() || "Could not focus the iTerm2 pane");
-    console.log(`focused terminal=${terminalId}`);
+async function focusTerminal(target: string, resolveRun: boolean): Promise<void> {
+  const terminalId = resolveRun
+    ? (await client().request<FocusTarget[]>("/api/focus-targets"))
+        .find((row) => row.id === target || row.session.includes(target))
+        ?.itermSessionId.split(":")
+        .at(-1)
+    : target.split(":").at(-1);
+  if (!terminalId) throw new Error(`No active terminal found: ${target}`);
+  const result = Bun.spawnSync(["it2", "session", "focus", terminalId], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
+  if (result.exitCode !== 0)
+    throw new Error(result.stderr.toString().trim() || "Could not focus the iTerm2 pane");
+  console.log(`focused terminal=${terminalId}`);
 }
 
 async function runInternal(
-  action: "session-event" | "session-end",
+  action: "session-event" | "session-prompt" | "session-end",
   cliValue: string,
 ): Promise<void> {
   const startedAt = performance.now();
@@ -373,7 +358,7 @@ async function runInternal(
     const cli: Cli = result.output;
     const payload = parseHookPayload(payloadText);
     log("parse-completed", { source: payload.source });
-    if (action === "session-event") {
+    if (action !== "session-end") {
       log("repository-check-start");
       if (!isRepositoryEnabled(payload.cwd)) {
         log("repository-disabled");
@@ -381,22 +366,42 @@ async function runInternal(
       }
       log("repository-check-completed");
     }
-    const dbPath = process.env.WR_DB_PATH ?? defaultDbPath();
-    if (action === "session-end" && !existsSync(dbPath)) {
-      log("database-missing");
-      return;
+    log("request-start");
+    if (action === "session-prompt" && !payload.prompt) {
+      throw new Error("UserPromptSubmit payload must include prompt");
     }
-    log("database-open-start");
-    const db = openDb(dbPath);
-    log("database-open-completed");
-    try {
-      log("database-write-start");
-      if (action === "session-event") registerSessionEvent(db, cli, payload);
-      else endSession(db, cli, payload);
-      log("database-write-completed");
-    } finally {
-      db.close();
+    const cwd = realpathSync(payload.cwd);
+    const checkout =
+      action === "session-prompt" ? undefined : normalizeStoredCheckout(discoverCheckout(cwd));
+    let endpoint: string;
+    switch (action) {
+      case "session-event":
+        endpoint = "/api/session-events";
+        break;
+      case "session-prompt":
+        endpoint = "/api/session-prompts";
+        break;
+      case "session-end":
+        endpoint = "/api/session-ends";
+        break;
     }
+    const response = await client().request<{ runId?: string | null }>(endpoint, {
+      method: "POST",
+      body: JSON.stringify({
+        cli,
+        payload: { ...payload, cwd: normalizeStoredPath(cwd) },
+        ...(checkout === undefined ? {} : { checkout }),
+        terminalId: process.env.TERM_SESSION_ID,
+      }),
+    });
+    if (action === "session-event" && cli === "claude") {
+      appendClaudeEnvironment(
+        process.env.CLAUDE_ENV_FILE,
+        { cli, externalSessionId: payload.session_id },
+        response.runId ?? null,
+      );
+    }
+    log("request-completed");
     log("completed");
   } catch (error) {
     log("error", {
@@ -407,6 +412,65 @@ async function runInternal(
   }
 }
 
+function runGh(args: string[], cwd = process.cwd()): string {
+  const result = Bun.spawnSync(["gh", ...args], {
+    cwd,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || "gh failed");
+  return result.stdout.toString().trim();
+}
+
+function repositoryName(cwd = process.cwd()): string {
+  return v.parse(
+    RepositorySchema,
+    JSON.parse(runGh(["repo", "view", "--json", "nameWithOwner"], cwd)),
+  ).nameWithOwner;
+}
+
+function loadPullRequest(repo: string, number: number, cwd = process.cwd()): PullRequestInput {
+  const value = v.parse(
+    PullRequestSchema,
+    JSON.parse(
+      runGh(
+        [
+          "pr",
+          "view",
+          String(number),
+          "--repo",
+          repo,
+          "--json",
+          "number,url,headRefName,baseRefName,state",
+        ],
+        cwd,
+      ),
+    ),
+  );
+  return {
+    repo,
+    number: value.number,
+    url: value.url,
+    headBranch: value.headRefName,
+    baseBranch: value.baseRefName,
+    state: value.state,
+  };
+}
+
+async function syncPullRequestStates(all: boolean): Promise<number> {
+  const api = client();
+  const targets = await api.request<Array<{ repo: string; number: number }>>(
+    `/api/pull-requests/sync-targets?all=${all}`,
+  );
+  const pullRequests = targets.map((target) => loadPullRequest(target.repo, target.number));
+  await api.request("/api/pull-requests/sync", {
+    method: "POST",
+    body: JSON.stringify({ pullRequests }),
+  });
+  return pullRequests.length;
+}
+
 const commandParser = or(
   command(
     "internal",
@@ -414,6 +478,10 @@ const commandParser = or(
       command(
         "session-event",
         object({ action: constant("internal-session-event"), cli: option("--cli", textValue) }),
+      ),
+      command(
+        "session-prompt",
+        object({ action: constant("internal-session-prompt"), cli: option("--cli", textValue) }),
       ),
       command(
         "session-end",
@@ -444,6 +512,9 @@ const commandParser = or(
         }),
         { description: message`Disable a repository.` },
       ),
+      command("server", object({ action: constant("config-server"), url: argument(textValue) }), {
+        description: message`Set the Worker URL.`,
+      }),
     ),
     { description: message`Manage repository opt-in.` },
   ),
@@ -644,6 +715,9 @@ const commandParser = or(
       command("list", object({ action: constant("run-list"), ...resourceOptions() }), {
         description: message`List session runs.`,
       }),
+      command("sync", object({ action: constant("run-sync") }), {
+        description: message`End runs whose iTerm2 sessions no longer exist.`,
+      }),
       command(
         "focus",
         object({
@@ -778,12 +852,21 @@ try {
     case "internal-session-event":
       await runInternal("session-event", cli.cli);
       break;
+    case "internal-session-prompt":
+      await runInternal("session-prompt", cli.cli);
+      break;
     case "internal-session-end":
       await runInternal("session-end", cli.cli);
       break;
     case "config-list": {
-      const repositories = readConfig().repositories;
-      console.log(repositories.length === 0 ? "No enabled repositories" : repositories.join("\n"));
+      const config = readConfig();
+      console.log(`server ${config.serverUrl ?? "not configured"}`);
+      console.log(`device-id ${config.deviceId}`);
+      console.log(
+        config.repositories.length === 0
+          ? "No enabled repositories"
+          : config.repositories.join("\n"),
+      );
       break;
     }
     case "config-enable": {
@@ -796,195 +879,240 @@ try {
       console.log(`${result.changed ? "disabled" : "already disabled"} ${result.repoRoot}`);
       break;
     }
+    case "config-server":
+      setServerUrl(cli.url);
+      console.log(`server ${cli.url}`);
+      break;
     case "task-list":
-      runResource("tasks", cli);
+      await runResource("tasks", cli);
       break;
-    case "task-add":
+    case "task-add": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const result = addTask(db, cli.issue, cli.title);
-        console.log(`registered ${result.issue} status=${result.status}`);
+      const result = await client().request<{ issue: string; status: string }>("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({ issue: cli.issue, title: cli.title }),
       });
+      console.log(`registered ${result.issue} status=${result.status}`);
       break;
-    case "task-start":
+    }
+    case "task-start": {
       requireEnabledRepository(process.cwd());
       if (cli.worktree) requireEnabledRepository(cli.worktree);
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = startTask(db, current, cli.issue, cli);
-        if (result.reopened) console.error(`reopened ${cli.issue} (was done or cancelled)`);
-        console.log(`started ${cli.issue} execution=${result.executionId}`);
-      });
+      const context = currentContext(cli.worktree ?? process.cwd(), cli.session);
+      const result = await client().request<{ executionId: string; reopened: boolean }>(
+        `/api/tasks/${encodeURIComponent(cli.issue)}/start`,
+        {
+          method: "POST",
+          body: JSON.stringify({ context, title: cli.title }),
+        },
+      );
+      if (result.reopened) console.error(`reopened ${cli.issue} (was done or cancelled)`);
+      console.log(`started ${cli.issue} execution=${result.executionId}`);
       break;
-    case "task-done":
+    }
+    case "task-done": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = doneTask(db, current, cli.issue);
-        console.log(
-          `done ${result.issue} finished=${result.finished} abandoned=${result.abandoned}`,
-        );
-      });
+      const endpoint = cli.issue
+        ? `/api/tasks/${encodeURIComponent(cli.issue)}/done`
+        : "/api/tasks/current/done";
+      const result = await client().request<{ issue: string; finished: number; abandoned: number }>(
+        endpoint,
+        {
+          method: "POST",
+          body: JSON.stringify({ context: currentContext(process.cwd(), cli.session) }),
+        },
+      );
+      console.log(`done ${result.issue} finished=${result.finished} abandoned=${result.abandoned}`);
       break;
-    case "task-cancel":
+    }
+    case "task-cancel": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = cli.issue ? null : resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = cancelTask(db, current, cli.issue);
-        console.log(`cancelled ${result.issue} abandoned=${result.abandoned}`);
+      const endpoint = cli.issue
+        ? `/api/tasks/${encodeURIComponent(cli.issue)}/cancel`
+        : "/api/tasks/current/cancel";
+      const result = await client().request<{ issue: string; abandoned: number }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ context: currentContext(process.cwd(), cli.session) }),
       });
+      console.log(`cancelled ${result.issue} abandoned=${result.abandoned}`);
       break;
+    }
     case "pr-list":
-      runResource("prs", cli);
+      await runResource("prs", cli);
       break;
-    case "pr-add":
+    case "pr-add": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = addPullRequest(db, current, cli.number, {
+      const repo = repositoryName();
+      await client().request("/api/pull-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          pullRequest: loadPullRequest(repo, cli.number),
           task: cli.task,
           parent: cli.parent,
-        });
-        if (result.warning) console.error(`warning: ${result.warning}`);
-        console.log(`added ${result.repo}#${cli.number}`);
+          parentPullRequest: cli.parent ? loadPullRequest(repo, cli.parent) : undefined,
+          context: currentContext(process.cwd(), cli.session),
+        }),
       });
+      console.log(`added ${repo}#${cli.number}`);
       break;
-    case "pr-remove":
+    }
+    case "pr-remove": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const result = removePullRequest(db, cli.number, cli.task);
-        console.log(`removed ${result.repo}#${cli.number} task=${result.issue}`);
-      });
+      const repo = repositoryName();
+      await client().request(
+        `/api/pull-requests/${encodeURIComponent(repo)}/${cli.number}/tasks/${encodeURIComponent(cli.task)}`,
+        { method: "DELETE" },
+      );
+      console.log(`removed ${repo}#${cli.number} task=${cli.task}`);
       break;
-    case "pr-sync":
-      withDb((db) => {
-        const result = syncPullRequestStates(db, cli.all);
-        console.log(`synced prs=${result.pullRequests}`);
-      });
+    }
+    case "pr-sync": {
+      const count = await syncPullRequestStates(cli.all);
+      console.log(`synced prs=${count}`);
       break;
+    }
     case "link-list":
-      runResource("links", cli);
+      await runResource("links", cli);
       break;
     case "link-workpad-add":
-    case "legacy-link-workpad-add":
+    case "legacy-link-workpad-add": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = addWorkpadLink(db, current, cli.ref, cli.task);
-        console.log(`linked workpad=${result.ref} task=${result.issue ?? "none"}`);
+      const ref = normalizeStoredPath(existsSync(cli.ref) ? realpathSync(cli.ref) : cli.ref);
+      await client().request("/api/workpad-links", {
+        method: "POST",
+        body: JSON.stringify({
+          ref,
+          task: cli.task,
+          context: currentContext(process.cwd(), cli.session),
+        }),
       });
+      console.log(`linked workpad=${ref} task=${cli.task ?? "none"}`);
       break;
-    case "link-workpad-remove":
+    }
+    case "link-workpad-remove": {
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = removeWorkpadLink(db, current, cli.ref, cli.task);
-        console.log(`removed workpad=${result.ref} task=${result.issue ?? "none"}`);
+      const ref = normalizeStoredPath(existsSync(cli.ref) ? realpathSync(cli.ref) : cli.ref);
+      await client().request("/api/workpad-links", {
+        method: "DELETE",
+        body: JSON.stringify({
+          ref,
+          task: cli.task,
+          context: currentContext(process.cwd(), cli.session),
+        }),
       });
+      console.log(`removed workpad=${ref} task=${cli.task ?? "none"}`);
       break;
+    }
     case "legacy-link-remove":
       if (cli.kind !== "workpad") throw new Error(`Unknown link kind: ${cli.kind}`);
       requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = removeWorkpadLink(db, current, cli.ref, cli.task);
-        console.log(`removed workpad=${result.ref} task=${result.issue ?? "none"}`);
+      await client().request("/api/workpad-links", {
+        method: "DELETE",
+        body: JSON.stringify({
+          ref: normalizeStoredPath(existsSync(cli.ref) ? realpathSync(cli.ref) : cli.ref),
+          task: cli.task,
+          context: currentContext(process.cwd(), cli.session),
+        }),
       });
+      console.log(`removed workpad=${cli.ref} task=${cli.task ?? "none"}`);
       break;
     case "session-list":
-      runResource("sessions", cli);
+      await runResource("sessions", cli);
       break;
     case "checkout-list":
-      runResource("checkouts", cli);
+      await runResource("checkouts", cli);
       break;
     case "execution-list":
-      runResource("executions", cli);
+      await runResource("executions", cli);
       break;
     case "branch-list":
-      runResource("branches", cli);
+      await runResource("branches", cli);
       break;
     case "repo-list":
-      runResource("repos", cli);
+      await runResource("repos", cli);
       break;
     case "run-list":
-      runResource("runs", cli);
+      await runResource("runs", cli);
+      break;
+    case "run-sync":
+      await syncSessionRuns();
       break;
     case "run-focus":
-      focusTerminal(cli.target, true);
+      await focusTerminal(cli.target, true);
       break;
     case "terminal-list":
-      runResource("terminals", cli);
+      await runResource("terminals", cli);
       break;
     case "terminal-focus":
-      focusTerminal(cli.target, false);
+      await focusTerminal(cli.target, false);
       break;
-    case "show":
+    case "show": {
       if (cli.task && cli.worktree)
         throw new Error("--task and --worktree cannot be used together");
       if (!cli.task && !cli.worktree) requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current =
-          cli.task || cli.worktree ? null : resolveCurrentContext(db, process.cwd(), cli.session);
-        console.log(show(db, current, cli));
-      });
-      break;
-    case "sync":
-      requireEnabledRepository(process.cwd());
-      withDb((db) => {
-        const current = resolveCurrentContext(db, process.cwd(), cli.session);
-        const result = syncPullRequests(db, current);
-        console.log(
-          `synced checkouts=${result.checkouts} prs=${result.pullRequests} linked=${result.linked} skipped=${result.skipped}`,
+      const params = new URLSearchParams();
+      if (cli.task) params.set("task", cli.task);
+      if (cli.worktree)
+        params.set(
+          "worktree",
+          normalizeStoredPath(discoverCheckout(cli.worktree, true)!.worktreePath),
         );
-      });
+      if (!cli.task && !cli.worktree)
+        params.set(
+          "session",
+          currentContext(process.cwd(), cli.session).session!.externalSessionId,
+        );
+      const result = await client().request<ShowTask[]>(`/api/show?${params}`);
+      console.log(cli.json ? JSON.stringify(result, null, 2) : renderShow(result));
+      break;
+    }
+    case "sync":
+      // TODO: Remove this compatibility alias after callers migrate to `wr pr sync`.
+      console.log(`synced prs=${await syncPullRequestStates(false)}`);
       break;
     case "doctor":
-      runDoctor();
+      await runDoctor();
       break;
     case "ui": {
-      const db = openDb(process.env.WR_DB_PATH);
-      try {
-        await render(createElement(WrUi, { targets: queryFocusTargets(db) })).waitUntilExit();
-      } finally {
-        db.close();
-      }
+      const targets = await client().request<FocusTarget[]>("/api/focus-targets");
+      await render(createElement(WrUi, { targets })).waitUntilExit();
       break;
     }
     case "legacy-tasks":
-      runResource("tasks", cli);
+      await runResource("tasks", cli);
       break;
     case "legacy-sessions":
-      runResource("sessions", cli);
+      await runResource("sessions", cli);
       break;
     case "legacy-checkouts":
-      runResource("checkouts", cli);
+      await runResource("checkouts", cli);
       break;
     case "legacy-executions":
-      runResource("executions", cli);
+      await runResource("executions", cli);
       break;
     case "legacy-links":
-      runResource("links", cli);
+      await runResource("links", cli);
       break;
     case "legacy-prs":
-      runResource("prs", cli);
+      await runResource("prs", cli);
       break;
     case "legacy-branches":
-      runResource("branches", cli);
+      await runResource("branches", cli);
       break;
     case "legacy-repos":
-      runResource("repos", cli);
+      await runResource("repos", cli);
       break;
     case "legacy-runs":
-      runResource("runs", cli);
+      await runResource("runs", cli);
       break;
     case "legacy-runs-focus":
-      focusTerminal(cli.target, true);
+      await focusTerminal(cli.target, true);
       break;
     case "legacy-terminals":
-      runResource("terminals", cli);
+      await runResource("terminals", cli);
       break;
     case "legacy-terminals-focus":
-      focusTerminal(cli.target, false);
+      await focusTerminal(cli.target, false);
       break;
   }
 } catch (error) {

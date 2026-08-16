@@ -90,6 +90,13 @@ typings/
 # Nuxt.js build / generate output
 .nuxt
 dist
+build
+.wrangler
+.dev.vars*
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
 
 # Gatsby files
 .cache/
