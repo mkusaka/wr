@@ -119,6 +119,22 @@ function pullRequestScope(userId: string, deviceId: string | undefined, all: boo
   )`;
 }
 
+async function ensureTask(db: Database, deviceId: string, issue: string) {
+  const existing = await db
+    .select({ id: schema.tasks.id })
+    .from(schema.tasks)
+    .where(eq(schema.tasks.issueId, issue))
+    .get();
+  if (existing) return existing;
+  const task = { id: id() };
+  await db.insert(schema.tasks).values({
+    ...task,
+    issueId: issue,
+    createdByDeviceId: deviceId,
+  });
+  return task;
+}
+
 async function ensureSession(db: Database, deviceId: string, session: ContextInput["session"]) {
   if (!session) throw new HTTPException(400, { message: "Could not resolve a session" });
   const existing = await db
@@ -132,11 +148,16 @@ async function ensureSession(db: Database, deviceId: string, session: ContextInp
       ),
     )
     .get();
-  if (!existing)
-    throw new HTTPException(404, {
-      message: `Session not registered: ${session.externalSessionId}`,
-    });
-  return existing.id;
+  if (existing) return existing.id;
+  const sessionId = id();
+  await db.insert(schema.cliSessions).values({
+    id: sessionId,
+    deviceId,
+    cli: session.cli,
+    externalSessionId: session.externalSessionId,
+    updatedAt: now,
+  });
+  return sessionId;
 }
 
 async function ensureCheckout(db: Database, deviceId: string, checkout: CheckoutInput | null) {
@@ -164,7 +185,7 @@ async function ensureCheckout(db: Database, deviceId: string, checkout: Checkout
 
 async function resolveContext(db: Database, deviceId: string, context: ContextInput) {
   const sessionId = await ensureSession(db, deviceId, context.session);
-  const run = context.runId
+  let run = context.runId
     ? await db
         .select({ id: schema.sessionRuns.id })
         .from(schema.sessionRuns)
@@ -190,7 +211,19 @@ async function resolveContext(db: Database, deviceId: string, context: ContextIn
         )
         .orderBy(desc(schema.sessionRuns.lastSeenAt))
         .get();
-  if (!run) throw new HTTPException(404, { message: "No active session run found" });
+  if (!run) {
+    if (context.runId) throw new HTTPException(404, { message: "No active session run found" });
+    const runId = id();
+    await db.insert(schema.sessionRuns).values({
+      id: runId,
+      deviceId,
+      cliSessionId: sessionId,
+      terminalId: context.terminalId,
+      startedCwd: context.checkout?.worktreePath ?? null,
+      source: "implicit",
+    });
+    run = { id: runId };
+  }
   const checkoutId = await ensureCheckout(db, deviceId, context.checkout);
   if (checkoutId) {
     await db
@@ -499,27 +532,22 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             .from(schema.tasks)
             .where(eq(schema.tasks.issueId, c.req.param("issue")))
             .get();
+    if (!task && c.req.param("issue") !== "current") {
+      task = {
+        ...(await ensureTask(db, deviceId, c.req.param("issue"))),
+        issue: c.req.param("issue"),
+      };
+    }
     if (!task) throw new HTTPException(404, { message: `Task not found: ${c.req.param("issue")}` });
-    await db
+    const ensureTaskStatement = db
+      .insert(schema.tasks)
+      .values({ id: task.id, issueId: task.issue, createdByDeviceId: deviceId })
+      .onConflictDoNothing();
+    const taskStatement = db
       .update(schema.tasks)
       .set({ status: action === "done" ? "done" : "cancelled", updatedAt: now })
       .where(eq(schema.tasks.id, task.id));
-    let finished = 0;
-    if (action === "done") {
-      const result = await db
-        .update(schema.executions)
-        .set({ status: "finished", finishedAt: now })
-        .where(
-          and(
-            eq(schema.executions.deviceId, deviceId),
-            eq(schema.executions.taskId, task.id),
-            eq(schema.executions.cliSessionId, current.sessionId),
-            eq(schema.executions.status, "active"),
-          ),
-        );
-      finished = result.meta.changes;
-    }
-    const abandonedResult = await db
+    const abandonedStatement = db
       .update(schema.executions)
       .set({ status: "abandoned", finishedAt: now })
       .where(
@@ -529,7 +557,35 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           eq(schema.executions.status, "active"),
         ),
       );
-    return c.json({ issue: task.issue, finished, abandoned: abandonedResult.meta.changes });
+    if (action === "done") {
+      const [, , finishedResult, abandonedResult] = await db.batch([
+        ensureTaskStatement,
+        taskStatement,
+        db
+          .update(schema.executions)
+          .set({ status: "finished", finishedAt: now })
+          .where(
+            and(
+              eq(schema.executions.deviceId, deviceId),
+              eq(schema.executions.taskId, task.id),
+              eq(schema.executions.cliSessionId, current.sessionId),
+              eq(schema.executions.status, "active"),
+            ),
+          ),
+        abandonedStatement,
+      ]);
+      return c.json({
+        issue: task.issue,
+        finished: finishedResult.meta.changes,
+        abandoned: abandonedResult.meta.changes,
+      });
+    }
+    const [, , abandonedResult] = await db.batch([
+      ensureTaskStatement,
+      taskStatement,
+      abandonedStatement,
+    ]);
+    return c.json({ issue: task.issue, finished: 0, abandoned: abandonedResult.meta.changes });
   });
 
   app.post("/api/session-events", async (c) => {
@@ -737,15 +793,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       (parentPullRequest.repo !== pr.repo || parentPullRequest.number !== parentNumber)
     )
       throw new HTTPException(400, { message: "Parent pull request does not match --parent" });
-    const task = taskIssue
-      ? await db
-          .select({ id: schema.tasks.id })
-          .from(schema.tasks)
-          .where(eq(schema.tasks.issueId, taskIssue))
-          .get()
-      : undefined;
-    if (taskIssue && !task)
-      throw new HTTPException(404, { message: `Task not found: ${taskIssue}` });
+    const task = taskIssue ? await ensureTask(db, deviceId, taskIssue) : undefined;
     const current = value.context
       ? await resolveContext(db, deviceId, v.parse(ContextInputSchema, value.context))
       : undefined;
@@ -892,14 +940,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const current = await resolveContext(db, deviceId, v.parse(ContextInputSchema, value.context));
     if (!current.checkoutId) throw new HTTPException(400, { message: "No checkout found" });
     const issue = v.parse(v.optional(v.string()), value.task);
-    const task = issue
-      ? await db
-          .select({ id: schema.tasks.id })
-          .from(schema.tasks)
-          .where(eq(schema.tasks.issueId, issue))
-          .get()
-      : undefined;
-    if (issue && !task) throw new HTTPException(404, { message: `Task not found: ${issue}` });
+    const task = issue ? await ensureTask(db, deviceId, issue) : undefined;
     await db
       .insert(schema.workpadLinks)
       .values({

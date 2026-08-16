@@ -505,7 +505,45 @@ describe("wr Worker API", () => {
     expect(executions.map((row) => row.status).toSorted()).toEqual(["abandoned", "finished"]);
   });
 
-  test("does not register a pull request for a missing task", async () => {
+  test("implicitly registers a missing session and run for task operations", async () => {
+    const context = {
+      session: { cli: "codex" as const, externalSessionId: "implicit-session" },
+      checkout,
+    };
+    expect(
+      (await request("/api/tasks/MOQ-IMPLICIT/start", "implicit-device", { context })).status,
+    ).toBe(200);
+    expect(
+      (await request("/api/tasks/MOQ-IMPLICIT/done", "implicit-device", { context })).status,
+    ).toBe(200);
+
+    const sessions = await (
+      await request("/api/device/resources/sessions", "implicit-device")
+    ).json<Array<{ externalSessionId: string }>>();
+    expect(sessions.map((row) => row.externalSessionId)).toEqual(["implicit-session"]);
+    const executions = await (
+      await request("/api/device/resources/executions", "implicit-device")
+    ).json<Array<{ status: string }>>();
+    expect(executions.map((row) => row.status)).toEqual(["finished"]);
+  });
+
+  test("registers a missing task before completing it", async () => {
+    const context = {
+      session: { cli: "codex" as const, externalSessionId: "implicit-done-session" },
+      checkout,
+    };
+    const response = await request("/api/tasks/MOQ-IMPLICIT-DONE/done", "implicit-done-device", {
+      context,
+    });
+    expect(response.status).toBe(200);
+    const tasks = await (
+      await request("/api/tasks", "implicit-done-device")
+    ).json<Array<{ linearIssueId: string; status: string }>>();
+    expect(tasks[0]?.linearIssueId).toBe("MOQ-IMPLICIT-DONE");
+    expect(tasks[0]?.status).toBe("done");
+  });
+
+  test("registers a missing task when adding a pull request", async () => {
     const pullRequest = {
       repo: "example/repo",
       number: 1,
@@ -516,10 +554,11 @@ describe("wr Worker API", () => {
     };
     expect(
       (await request("/api/pull-requests", "pr-device", { pullRequest, task: "MOQ-404" })).status,
-    ).toBe(404);
-    await expect(
-      (await request("/api/pull-requests", "pr-device")).json<unknown[]>(),
-    ).resolves.toHaveLength(0);
+    ).toBe(200);
+    const tasks = await (
+      await request("/api/tasks", "pr-device")
+    ).json<Array<{ linearIssueId: string }>>();
+    expect(tasks.map((task) => task.linearIssueId)).toEqual(["MOQ-404"]);
   });
 
   test("registers a missing parent pull request and rejects self-parenting", async () => {
@@ -612,14 +651,18 @@ describe("wr Worker API", () => {
       session: { cli: "codex", externalSessionId: payload.session_id },
       checkout,
     };
-    await request("/api/workpad-links", "workpad-device", { context, ref: "/tmp/workpad.md" });
+    await request("/api/workpad-links", "workpad-device", {
+      context,
+      ref: "/tmp/workpad.md",
+      task: "MOQ-WORKPAD",
+    });
     await expect(
       (await request("/api/device/resources/links", "workpad-device")).json<unknown[]>(),
     ).resolves.toHaveLength(1);
     await request(
       "/api/workpad-links",
       "workpad-device",
-      { context, ref: "/tmp/workpad.md" },
+      { context, ref: "/tmp/workpad.md", task: "MOQ-WORKPAD" },
       "DELETE",
     );
     await expect(
