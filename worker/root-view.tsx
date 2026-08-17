@@ -8,8 +8,15 @@ function Document({ page }: { page: PageObject }) {
       <head>
         <meta charSet="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta
+          name="description"
+          content="A relationship ledger for tasks, sessions, checkouts, pull requests, and workpads."
+        />
+        <meta name="theme-color" content="#18181b" />
         <title>wr</title>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/pwa-192.png" />
         <script
           dangerouslySetInnerHTML={{
             __html: `const theme=localStorage.getItem("wr-theme");document.documentElement.classList.toggle("dark",theme==="dark"||(theme===null&&matchMedia("(prefers-color-scheme: dark)").matches));`,

@@ -1,6 +1,9 @@
 import { createInertiaApp, type ResolvedComponent } from "@inertiajs/react";
 import { NuqsAdapter } from "nuqs/adapters/react";
 import { createRoot } from "react-dom/client";
+import { registerSW } from "virtual:pwa-register";
+
+registerSW({ immediate: true });
 
 createInertiaApp({
   resolve: async (name) => {
