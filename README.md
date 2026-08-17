@@ -89,18 +89,30 @@ For Devin CLI, add the commands under the `hooks` key in `~/.config/devin/config
 ```json
 {
   "hooks": {
-    "SessionStart": [{
-      "matcher": "",
-      "hooks": [{"type": "command", "command": "wr internal session-event --cli devin", "timeout": 5}]
-    }],
-    "UserPromptSubmit": [{
-      "matcher": "",
-      "hooks": [{"type": "command", "command": "wr internal session-prompt --cli devin", "timeout": 5}]
-    }],
-    "SessionEnd": [{
-      "matcher": "",
-      "hooks": [{"type": "command", "command": "wr internal session-end --cli devin", "timeout": 5}]
-    }]
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "wr internal session-event --cli devin", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "wr internal session-prompt --cli devin", "timeout": 5 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "wr internal session-end --cli devin", "timeout": 5 }
+        ]
+      }
+    ]
   }
 }
 ```

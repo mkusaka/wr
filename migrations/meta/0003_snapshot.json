@@ -54,19 +54,12 @@
       "indexes": {
         "checkouts_device_repo_worktree_unique": {
           "name": "checkouts_device_repo_worktree_unique",
-          "columns": [
-            "device_id",
-            "repo_root",
-            "worktree_path"
-          ],
+          "columns": ["device_id", "repo_root", "worktree_path"],
           "isUnique": true
         },
         "checkouts_device_repo_idx": {
           "name": "checkouts_device_repo_idx",
-          "columns": [
-            "device_id",
-            "repo_root"
-          ],
+          "columns": ["device_id", "repo_root"],
           "isUnique": false
         }
       },
@@ -75,12 +68,8 @@
           "name": "checkouts_device_id_devices_id_fk",
           "tableFrom": "checkouts",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -146,11 +135,7 @@
       "indexes": {
         "cli_sessions_device_cli_external_unique": {
           "name": "cli_sessions_device_cli_external_unique",
-          "columns": [
-            "device_id",
-            "cli",
-            "external_session_id"
-          ],
+          "columns": ["device_id", "cli", "external_session_id"],
           "isUnique": true
         }
       },
@@ -159,12 +144,8 @@
           "name": "cli_sessions_device_id_devices_id_fk",
           "tableFrom": "cli_sessions",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -225,12 +206,8 @@
           "name": "devices_user_id_users_id_fk",
           "tableFrom": "devices",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -311,10 +288,7 @@
       "indexes": {
         "executions_device_status_idx": {
           "name": "executions_device_status_idx",
-          "columns": [
-            "device_id",
-            "status"
-          ],
+          "columns": ["device_id", "status"],
           "isUnique": false
         }
       },
@@ -323,12 +297,8 @@
           "name": "executions_device_id_devices_id_fk",
           "tableFrom": "executions",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -336,12 +306,8 @@
           "name": "executions_task_id_tasks_id_fk",
           "tableFrom": "executions",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -349,12 +315,8 @@
           "name": "executions_cli_session_id_cli_sessions_id_fk",
           "tableFrom": "executions",
           "tableTo": "cli_sessions",
-          "columnsFrom": [
-            "cli_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["cli_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -362,12 +324,8 @@
           "name": "executions_session_run_id_session_runs_id_fk",
           "tableFrom": "executions",
           "tableTo": "session_runs",
-          "columnsFrom": [
-            "session_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -375,12 +333,8 @@
           "name": "executions_checkout_id_checkouts_id_fk",
           "tableFrom": "executions",
           "tableTo": "checkouts",
-          "columnsFrom": [
-            "checkout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["checkout_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -480,10 +434,7 @@
       "indexes": {
         "pull_requests_repo_number_unique": {
           "name": "pull_requests_repo_number_unique",
-          "columns": [
-            "repo",
-            "number"
-          ],
+          "columns": ["repo", "number"],
           "isUnique": true
         }
       },
@@ -492,12 +443,8 @@
           "name": "pull_requests_parent_pr_id_pull_requests_id_fk",
           "tableFrom": "pull_requests",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "parent_pr_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["parent_pr_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -505,12 +452,8 @@
           "name": "pull_requests_created_by_device_id_devices_id_fk",
           "tableFrom": "pull_requests",
           "tableTo": "devices",
-          "columnsFrom": [
-            "created_by_device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by_device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -563,12 +506,8 @@
           "name": "session_run_checkouts_device_id_devices_id_fk",
           "tableFrom": "session_run_checkouts",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -576,12 +515,8 @@
           "name": "session_run_checkouts_session_run_id_session_runs_id_fk",
           "tableFrom": "session_run_checkouts",
           "tableTo": "session_runs",
-          "columnsFrom": [
-            "session_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -589,23 +524,15 @@
           "name": "session_run_checkouts_checkout_id_checkouts_id_fk",
           "tableFrom": "session_run_checkouts",
           "tableTo": "checkouts",
-          "columnsFrom": [
-            "checkout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["checkout_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "session_run_checkouts_device_id_session_run_id_checkout_id_pk": {
-          "columns": [
-            "device_id",
-            "session_run_id",
-            "checkout_id"
-          ],
+          "columns": ["device_id", "session_run_id", "checkout_id"],
           "name": "session_run_checkouts_device_id_session_run_id_checkout_id_pk"
         }
       },
@@ -658,12 +585,8 @@
           "name": "session_run_pull_requests_device_id_devices_id_fk",
           "tableFrom": "session_run_pull_requests",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -671,12 +594,8 @@
           "name": "session_run_pull_requests_session_run_id_session_runs_id_fk",
           "tableFrom": "session_run_pull_requests",
           "tableTo": "session_runs",
-          "columnsFrom": [
-            "session_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -684,12 +603,8 @@
           "name": "session_run_pull_requests_checkout_id_checkouts_id_fk",
           "tableFrom": "session_run_pull_requests",
           "tableTo": "checkouts",
-          "columnsFrom": [
-            "checkout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["checkout_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -697,24 +612,15 @@
           "name": "session_run_pull_requests_pull_request_id_pull_requests_id_fk",
           "tableFrom": "session_run_pull_requests",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "pull_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pull_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "session_run_pull_requests_device_id_session_run_id_checkout_id_pull_request_id_pk": {
-          "columns": [
-            "device_id",
-            "session_run_id",
-            "checkout_id",
-            "pull_request_id"
-          ],
+          "columns": ["device_id", "session_run_id", "checkout_id", "pull_request_id"],
           "name": "session_run_pull_requests_device_id_session_run_id_checkout_id_pull_request_id_pk"
         }
       },
@@ -800,11 +706,7 @@
       "indexes": {
         "session_runs_device_active_idx": {
           "name": "session_runs_device_active_idx",
-          "columns": [
-            "device_id",
-            "ended_at",
-            "last_seen_at"
-          ],
+          "columns": ["device_id", "ended_at", "last_seen_at"],
           "isUnique": false
         }
       },
@@ -813,12 +715,8 @@
           "name": "session_runs_device_id_devices_id_fk",
           "tableFrom": "session_runs",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -826,12 +724,8 @@
           "name": "session_runs_cli_session_id_cli_sessions_id_fk",
           "tableFrom": "session_runs",
           "tableTo": "cli_sessions",
-          "columnsFrom": [
-            "cli_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["cli_session_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -872,12 +766,8 @@
           "name": "task_pull_requests_task_id_tasks_id_fk",
           "tableFrom": "task_pull_requests",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -885,22 +775,15 @@
           "name": "task_pull_requests_pull_request_id_pull_requests_id_fk",
           "tableFrom": "task_pull_requests",
           "tableTo": "pull_requests",
-          "columnsFrom": [
-            "pull_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pull_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "task_pull_requests_task_id_pull_request_id_pk": {
-          "columns": [
-            "task_id",
-            "pull_request_id"
-          ],
+          "columns": ["task_id", "pull_request_id"],
           "name": "task_pull_requests_task_id_pull_request_id_pk"
         }
       },
@@ -966,9 +849,7 @@
       "indexes": {
         "tasks_issue_id_unique": {
           "name": "tasks_issue_id_unique",
-          "columns": [
-            "issue_id"
-          ],
+          "columns": ["issue_id"],
           "isUnique": true
         }
       },
@@ -977,12 +858,8 @@
           "name": "tasks_created_by_device_id_devices_id_fk",
           "tableFrom": "tasks",
           "tableTo": "devices",
-          "columnsFrom": [
-            "created_by_device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by_device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1040,9 +917,7 @@
       "indexes": {
         "users_access_subject_unique": {
           "name": "users_access_subject_unique",
-          "columns": [
-            "access_subject"
-          ],
+          "columns": ["access_subject"],
           "isUnique": true
         }
       },
@@ -1101,12 +976,7 @@
       "indexes": {
         "workpad_links_device_task_checkout_ref_unique": {
           "name": "workpad_links_device_task_checkout_ref_unique",
-          "columns": [
-            "device_id",
-            "task_id",
-            "checkout_id",
-            "ref"
-          ],
+          "columns": ["device_id", "task_id", "checkout_id", "ref"],
           "isUnique": true
         }
       },
@@ -1115,12 +985,8 @@
           "name": "workpad_links_device_id_devices_id_fk",
           "tableFrom": "workpad_links",
           "tableTo": "devices",
-          "columnsFrom": [
-            "device_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["device_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1128,12 +994,8 @@
           "name": "workpad_links_task_id_tasks_id_fk",
           "tableFrom": "workpad_links",
           "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["task_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1141,12 +1003,8 @@
           "name": "workpad_links_checkout_id_checkouts_id_fk",
           "tableFrom": "workpad_links",
           "tableTo": "checkouts",
-          "columnsFrom": [
-            "checkout_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["checkout_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
