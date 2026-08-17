@@ -959,6 +959,10 @@ export default function TasksIndex({
                     </CardHeader>
                   </button>
                   <CardContent>
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      <CopyCommand command={pullRequest.headBranch} />
+                      <CopyCommand command={pullRequest.baseBranch} />
+                    </div>
                     {pullRequest.deviceNames.length > 0 ? (
                       <p className="mb-2 text-xs text-muted-foreground">
                         Devices: {pullRequest.deviceNames.join(", ")}

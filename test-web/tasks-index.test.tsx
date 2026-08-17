@@ -255,6 +255,8 @@ describe("TasksIndex", () => {
       worktrees: [],
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "feature/patient-search" }));
+    fireEvent.click(screen.getByRole("button", { name: "main" }));
     fireEvent.click(screen.getByRole("button", { name: /example\/wr#42/ }));
     const resume = await screen.findByRole("button", {
       name: "claude --resume session-42",
@@ -268,6 +270,8 @@ describe("TasksIndex", () => {
     fireEvent.click(focus);
 
     await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("feature/patient-search");
+      expect(writeText).toHaveBeenCalledWith("main");
       expect(writeText).toHaveBeenCalledWith("claude --resume session-42");
       expect(writeText).toHaveBeenCalledWith("codex resume session-codex");
       expect(writeText).toHaveBeenCalledWith("devin --resume session-devin");
