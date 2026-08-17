@@ -1,4 +1,4 @@
 interface:
-  display_name: "wr service"
-  short_description: "Operate and migrate the wr service"
-  default_prompt: "Use $wr to operate the wr service, inspect D1, or apply a safe migration."
+  display_name: "wr CLI"
+  short_description: "Track wr CLI relationships"
+  default_prompt: "Use $wr to inspect or update wr CLI relationships."
