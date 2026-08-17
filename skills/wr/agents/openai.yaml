@@ -1,0 +1,4 @@
+interface:
+  display_name: "wr service"
+  short_description: "Operate and migrate the wr service"
+  default_prompt: "Use $wr to operate the wr service, inspect D1, or apply a safe migration."

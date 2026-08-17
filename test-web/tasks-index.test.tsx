@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { NuqsAdapter } from "nuqs/adapters/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import TasksIndex, {
+  type ConversationLink,
   type Device,
   type PullRequest,
   type Repository,
@@ -25,6 +26,7 @@ const tasks: Task[] = [
 const runs: Run[] = [
   {
     id: "run-a",
+    cliSessionId: "session-a",
     cli: "codex",
     externalSessionId: "session-a",
     terminalId: "terminal-a",
@@ -61,7 +63,27 @@ const worktrees: Worktree[] = [
   { worktreePath: "/src/example/wr/worktrees/patient" },
   { worktreePath: "/src/example/wr/worktrees/admin" },
 ];
-const pageProps = { runs, tasks, pullRequests, devices, repositories, worktrees };
+const conversationLinks: ConversationLink[] = [
+  {
+    id: "conversation-a",
+    cliSessionId: "session-a",
+    url: "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890.123456",
+    repoRoot: "/src/example/wr",
+    worktreePath: "/src/example/wr/worktrees/patient",
+    createdAt: "2026-08-15 12:00:00",
+    deviceIds: ["device-a"],
+    deviceNames: ["Work laptop"],
+  },
+];
+const pageProps = {
+  runs,
+  tasks,
+  pullRequests,
+  conversationLinks,
+  devices,
+  repositories,
+  worktrees,
+};
 
 function renderPage(props = pageProps) {
   return render(
@@ -93,7 +115,7 @@ describe("TasksIndex", () => {
     expect(localStorage.getItem("wr-theme")).toBe("light");
   });
 
-  test("shows current tasks and pull requests by default", () => {
+  test("shows current tasks, pull requests, and conversations by default", () => {
     renderPage();
 
     expect(screen.getByText("Devices: Work laptop")).toBeTruthy();
@@ -101,13 +123,14 @@ describe("TasksIndex", () => {
     expect(screen.getByRole("heading", { name: /Runs\s*1/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Pull requests\s*1/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Conversations\s*1/ })).toBeTruthy();
     expect(
       screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent),
-    ).toEqual(["Runs1", "Tasks 1", "Pull requests1"]);
+    ).toEqual(["Runs1", "Tasks 1", "Pull requests1", "Conversations1"]);
     expect(new URLSearchParams(window.location.search).has("state")).toBe(false);
   });
 
-  test("searches tasks and pull requests by device name", async () => {
+  test("searches tasks, pull requests, and conversations by device name", async () => {
     renderPage();
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
@@ -116,8 +139,25 @@ describe("TasksIndex", () => {
 
     expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Pull requests\s*1/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Conversations\s*1/ })).toBeTruthy();
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get("q")).toBe("Work laptop"),
+    );
+  });
+
+  test("searches conversation links by URL", async () => {
+    renderPage();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
+      target: { value: "moqona.slack.com" },
+    });
+
+    expect(screen.queryByRole("heading", { name: /Runs\s*1/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Tasks\s*1/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Pull requests\s*1/ })).toBeNull();
+    expect(screen.getByRole("heading", { name: /Conversations\s*1/ })).toBeTruthy();
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).get("q")).toBe("moqona.slack.com"),
     );
   });
 
@@ -250,6 +290,7 @@ describe("TasksIndex", () => {
       runs: [],
       tasks: [],
       pullRequests,
+      conversationLinks: [],
       devices: [],
       repositories: [],
       worktrees: [],

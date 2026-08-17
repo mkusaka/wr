@@ -6,6 +6,7 @@ import {
   GitPullRequestIcon,
   ListTodoIcon,
   LoaderCircleIcon,
+  MessageSquareIcon,
   MoonIcon,
   SearchIcon,
   SquareTerminalIcon,
@@ -52,6 +53,7 @@ export type Task = {
 
 export type Run = {
   id: string;
+  cliSessionId: string;
   cli: "codex" | "claude" | "devin";
   externalSessionId: string;
   terminalId: string | null;
@@ -87,10 +89,22 @@ export type Repository = { repoRoot: string };
 
 export type Worktree = { worktreePath: string };
 
+export type ConversationLink = {
+  id: string;
+  cliSessionId: string;
+  url: string;
+  repoRoot: string | null;
+  worktreePath: string | null;
+  createdAt: string;
+  deviceIds: string[];
+  deviceNames: string[];
+};
+
 type Ledger = {
   runs: Run[];
   tasks: Task[];
   pullRequests: PullRequest[];
+  conversationLinks: ConversationLink[];
   devices: Device[];
   repositories: Repository[];
   worktrees: Worktree[];
@@ -107,7 +121,13 @@ type Filters = {
 
 const filterParsers = {
   q: parseAsString.withDefault(""),
-  type: parseAsStringLiteral(["all", "runs", "tasks", "pullRequests"] as const).withDefault("all"),
+  type: parseAsStringLiteral([
+    "all",
+    "runs",
+    "tasks",
+    "pullRequests",
+    "conversations",
+  ] as const).withDefault("all"),
   state: parseAsStringLiteral([
     "current",
     "all",
@@ -188,6 +208,10 @@ export function filterLedger(ledger: Ledger, filters: Filters) {
     (filters.device === "all" || record.deviceIds.includes(filters.device)) &&
     (filters.repository === "all" || record.repoRoots.includes(filters.repository)) &&
     (filters.worktree === "all" || record.worktreePaths.includes(filters.worktree));
+  const matchesConversationScope = (conversation: ConversationLink) =>
+    (filters.device === "all" || conversation.deviceIds.includes(filters.device)) &&
+    (filters.repository === "all" || conversation.repoRoot === filters.repository) &&
+    (filters.worktree === "all" || conversation.worktreePath === filters.worktree);
   return {
     runs:
       filters.type !== "all" && filters.type !== "runs"
@@ -264,6 +288,23 @@ export function filterLedger(ledger: Ledger, filters: Filters) {
                 filters.query,
               ),
           ),
+    conversationLinks:
+      filters.type !== "all" && filters.type !== "conversations"
+        ? []
+        : ledger.conversationLinks.filter(
+            (conversation) =>
+              matchesConversationScope(conversation) &&
+              matchesQuery(
+                [
+                  conversation.url,
+                  conversation.repoRoot,
+                  conversation.worktreePath,
+                  conversation.deviceIds,
+                  conversation.deviceNames,
+                ],
+                filters.query,
+              ),
+          ),
   };
 }
 
@@ -276,6 +317,7 @@ function statusVariant(status: Task["status"] | PullRequest["state"] | Run["stat
 
 function isStateAvailable(type: string, state: string) {
   if (state === "current" || state === "all") return true;
+  if (type === "conversations") return false;
   if (type === "all") return state === "open";
   if (type === "runs") return state === "active" || state === "ended";
   if (type === "tasks")
@@ -326,6 +368,7 @@ export default function TasksIndex({
   runs,
   tasks,
   pullRequests,
+  conversationLinks,
   devices,
   repositories,
   worktrees,
@@ -333,6 +376,7 @@ export default function TasksIndex({
   runs: Run[];
   tasks: Task[];
   pullRequests: PullRequest[];
+  conversationLinks: ConversationLink[];
   devices: Device[];
   repositories: Repository[];
   worktrees: Worktree[];
@@ -359,13 +403,14 @@ export default function TasksIndex({
   const filtered = useMemo(
     () =>
       filterLedger(
-        { runs, tasks, pullRequests, devices, repositories, worktrees },
+        { runs, tasks, pullRequests, conversationLinks, devices, repositories, worktrees },
         { query, type, state, device, repository, worktree },
       ),
     [
       runs,
       tasks,
       pullRequests,
+      conversationLinks,
       devices,
       repositories,
       worktrees,
@@ -377,8 +422,12 @@ export default function TasksIndex({
       worktree,
     ],
   );
-  const total = runs.length + tasks.length + pullRequests.length;
-  const filteredTotal = filtered.runs.length + filtered.tasks.length + filtered.pullRequests.length;
+  const total = runs.length + tasks.length + pullRequests.length + conversationLinks.length;
+  const filteredTotal =
+    filtered.runs.length +
+    filtered.tasks.length +
+    filtered.pullRequests.length +
+    filtered.conversationLinks.length;
   const globalSearch = queryState.global ? "&global=true" : "";
   const searchDevices = (value: string) => {
     const request = ++deviceRequest.current;
@@ -503,7 +552,7 @@ export default function TasksIndex({
                 autoFocus
                 type="search"
                 value={query}
-                placeholder="Run, task, PR, device, repository, or worktree"
+                placeholder="Run, task, PR, conversation, device, repository, or worktree"
                 onChange={(event) => void setQueryState({ q: event.target.value || null })}
               />
             </InputGroup>
@@ -529,6 +578,7 @@ export default function TasksIndex({
                 <SelectItem id="runs">Runs</SelectItem>
                 <SelectItem id="tasks">Tasks</SelectItem>
                 <SelectItem id="pullRequests">Pull requests</SelectItem>
+                <SelectItem id="conversations">Conversations</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -731,6 +781,26 @@ export default function TasksIndex({
                       />
                       {run.terminalId ? <CopyCommand command={`wr run focus ${run.id}`} /> : null}
                     </div>
+                    {filtered.conversationLinks.filter(
+                      (conversation) => conversation.cliSessionId === run.cliSessionId,
+                    ).length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {filtered.conversationLinks
+                          .filter((conversation) => conversation.cliSessionId === run.cliSessionId)
+                          .map((conversation) => (
+                            <a
+                              key={conversation.id}
+                              className="max-w-full truncate rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
+                              href={conversation.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={conversation.url}
+                            >
+                              {conversation.url}
+                            </a>
+                          ))}
+                      </div>
+                    ) : null}
                   </CardContent>
                 </Card>
               ))}
@@ -864,20 +934,55 @@ export default function TasksIndex({
                               </div>
                             </section>
                           ) : null}
-                          {relationships.data.links.length > 0 ? (
+                          {relationships.data.links.filter((link) => link.kind === "workpad")
+                            .length > 0 ? (
                             <section>
                               <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
-                                Workpads {relationships.data.links.length}
+                                Workpads{" "}
+                                {
+                                  relationships.data.links.filter((link) => link.kind === "workpad")
+                                    .length
+                                }
                               </h4>
                               <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                                {relationships.data.links.map((link) => (
-                                  <code
-                                    key={link.ref}
-                                    className="break-all rounded-md border bg-muted/30 px-2.5 py-2 text-xs"
-                                  >
-                                    {link.ref}
-                                  </code>
-                                ))}
+                                {relationships.data.links
+                                  .filter((link) => link.kind === "workpad")
+                                  .map((link) => (
+                                    <code
+                                      key={link.ref}
+                                      className="break-all rounded-md border bg-muted/30 px-2.5 py-2 text-xs"
+                                    >
+                                      {link.ref}
+                                    </code>
+                                  ))}
+                              </div>
+                            </section>
+                          ) : null}
+                          {relationships.data.links.filter((link) => link.kind === "conversation")
+                            .length > 0 ? (
+                            <section>
+                              <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                                Conversations{" "}
+                                {
+                                  relationships.data.links.filter(
+                                    (link) => link.kind === "conversation",
+                                  ).length
+                                }
+                              </h4>
+                              <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
+                                {relationships.data.links
+                                  .filter((link) => link.kind === "conversation")
+                                  .map((link) => (
+                                    <a
+                                      key={link.ref}
+                                      className="break-all rounded-md border bg-muted/30 px-2.5 py-2 text-xs hover:bg-muted"
+                                      href={link.ref}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {link.ref}
+                                    </a>
+                                  ))}
                               </div>
                             </section>
                           ) : null}
@@ -1110,6 +1215,46 @@ export default function TasksIndex({
                       ) : null}
                     </CardContent>
                   ) : null}
+                </Card>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {filtered.conversationLinks.length > 0 ? (
+          <section aria-label="Conversation list">
+            <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold">
+              <MessageSquareIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+              Conversations
+              <span className="text-xs font-normal text-muted-foreground">
+                {filtered.conversationLinks.length}
+              </span>
+            </h2>
+            <div className="grid gap-3">
+              {filtered.conversationLinks.map((conversation) => (
+                <Card key={conversation.id} size="sm">
+                  <CardContent className="grid gap-3 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="break-all font-mono">{conversation.id}</span>
+                      <time dateTime={conversation.createdAt}>
+                        {new Date(`${conversation.createdAt}Z`).toLocaleString("en-US")}
+                      </time>
+                    </div>
+                    <a
+                      className="break-all text-primary underline-offset-4 hover:underline"
+                      href={conversation.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {conversation.url}
+                    </a>
+                    {conversation.repoRoot || conversation.worktreePath ? (
+                      <p className="break-all">
+                        {conversation.repoRoot}
+                        {conversation.worktreePath ? ` · ${conversation.worktreePath}` : ""}
+                      </p>
+                    ) : null}
+                  </CardContent>
                 </Card>
               ))}
             </div>

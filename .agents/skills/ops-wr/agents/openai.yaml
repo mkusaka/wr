@@ -1,0 +1,4 @@
+interface:
+  display_name: "Operate wr"
+  short_description: "Track tasks, runs, worktrees, PRs, and workpads"
+  default_prompt: "Use $ops-wr to operate the wr service and handle D1 migrations."

@@ -50,6 +50,7 @@ beforeEach(async () => {
   const db = drizzle((env as unknown as Env).DB, { schema });
   await db.delete(schema.sessionRunPullRequests);
   await db.delete(schema.taskPullRequests);
+  await db.delete(schema.conversationLinks);
   await db.delete(schema.workpadLinks);
   await db.delete(schema.executions);
   await db.delete(schema.sessionRunCheckouts);
@@ -108,6 +109,7 @@ describe("wr Worker API", () => {
           repoRoots: string[];
           worktreePaths: string[];
         }>;
+        conversationLinks: Array<{ url: string }>;
         devices: unknown[];
         repositories: unknown[];
         worktrees: unknown[];
@@ -642,6 +644,186 @@ describe("wr Worker API", () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  test("adds and removes conversation links for root and reply Slack permalinks", async () => {
+    const payload = { session_id: "conversation-session", cwd: "/src/example", source: "startup" };
+    await request("/api/session-events", "conversation-device", {
+      cli: "codex",
+      payload,
+      checkout,
+    });
+    const context = {
+      session: { cli: "codex", externalSessionId: payload.session_id },
+      checkout,
+    };
+    const rootUrl = "https://moqona.slack.com/archives/C0123456789/p1234567890123456";
+    const replyUrl =
+      "https://moqona.slack.com/archives/C9876543210/p9999999999999999?thread_ts=9876543210.999999";
+    await request("/api/conversation-links", "conversation-device", { url: rootUrl, context });
+    await request("/api/conversation-links", "conversation-device", { url: replyUrl, context });
+    const links = await (
+      await request("/api/device/resources/links", "conversation-device")
+    ).json<Array<{ kind: string; ref: string }>>();
+    expect(links).toHaveLength(2);
+
+    await request(
+      "/api/conversation-links",
+      "conversation-device",
+      { url: replyUrl, context },
+      "DELETE",
+    );
+    const remaining = await (
+      await request("/api/device/resources/links", "conversation-device")
+    ).json<Array<{ kind: string; ref: string }>>();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ kind: "conversation", ref: rootUrl });
+
+    await request(
+      "/api/conversation-links",
+      "conversation-device",
+      { url: rootUrl, context },
+      "DELETE",
+    );
+    await expect(
+      (await request("/api/device/resources/links", "conversation-device")).json<unknown[]>(),
+    ).resolves.toHaveLength(0);
+  });
+
+  test("does not remove a conversation link from another session", async () => {
+    const firstPayload = {
+      session_id: "first-conversation-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    const secondPayload = {
+      session_id: "second-conversation-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    await request("/api/session-events", "session-device", {
+      cli: "codex",
+      payload: firstPayload,
+      checkout,
+    });
+    await request("/api/session-events", "session-device", {
+      cli: "codex",
+      payload: secondPayload,
+      checkout,
+    });
+    const firstContext = {
+      session: { cli: "codex", externalSessionId: firstPayload.session_id },
+      checkout,
+    };
+    const secondContext = {
+      session: { cli: "codex", externalSessionId: secondPayload.session_id },
+      checkout,
+    };
+    const slackUrl = "https://moqona.slack.com/archives/C0123456789/p1234567890123456";
+    await request("/api/conversation-links", "session-device", {
+      url: slackUrl,
+      context: firstContext,
+    });
+    await request(
+      "/api/conversation-links",
+      "session-device",
+      { url: slackUrl, context: secondContext },
+      "DELETE",
+    );
+    await expect(
+      (await request("/api/device/resources/links", "session-device")).json<unknown[]>(),
+    ).resolves.toHaveLength(1);
+  });
+
+  test("removing a conversation link does not create a run for an ended session", async () => {
+    const sessionId = "ended-conversation-session";
+    const startupPayload = { session_id: sessionId, cwd: "/src/example", source: "startup" };
+    await request("/api/session-events", "ended-device", {
+      cli: "codex",
+      payload: startupPayload,
+      checkout,
+    });
+    const context = {
+      session: { cli: "codex", externalSessionId: sessionId },
+      checkout,
+    };
+    const slackUrl = "https://moqona.slack.com/archives/C0123456789/p1234567890123456";
+    await request("/api/conversation-links", "ended-device", { url: slackUrl, context });
+    await request("/api/session-ends", "ended-device", {
+      cli: "codex",
+      payload: { session_id: sessionId },
+    });
+    const beforeRuns = await (
+      await request("/api/device/resources/runs", "ended-device")
+    ).json<unknown[]>();
+    await request("/api/conversation-links", "ended-device", { url: slackUrl, context }, "DELETE");
+    const afterRuns = await (
+      await request("/api/device/resources/runs", "ended-device")
+    ).json<unknown[]>();
+    expect(afterRuns).toHaveLength(beforeRuns.length);
+  });
+
+  test.each([
+    "https://example.com/not-slack",
+    "https://slack.com/archives/C0123456789/p1234567890123456",
+    "https://moqona.slack.com/archives/C0123456789/p1234567890",
+    "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890",
+  ])("rejects invalid conversation URL %s", async (url) => {
+    const payload = {
+      session_id: "bad-conversation-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    await request("/api/session-events", "bad-conversation-device", {
+      cli: "codex",
+      payload,
+      checkout,
+    });
+    const context = {
+      session: { cli: "codex", externalSessionId: payload.session_id },
+      checkout,
+    };
+    expect(
+      (await request("/api/conversation-links", "bad-conversation-device", { url, context }))
+        .status,
+    ).toBe(400);
+  });
+
+  test("show returns conversation links through task executions", async () => {
+    const payload = {
+      session_id: "show-conversation-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    await request("/api/session-events", "show-conversation-device", {
+      cli: "codex",
+      payload,
+      checkout,
+    });
+    const context = {
+      session: { cli: "codex", externalSessionId: payload.session_id },
+      checkout,
+    };
+    await request("/api/tasks/MOQ-CONVERSATION/start", "show-conversation-device", {
+      context,
+      title: "Conversation task",
+    });
+    const slackUrl =
+      "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890.123456";
+    await request("/api/conversation-links", "show-conversation-device", {
+      url: slackUrl,
+      context,
+    });
+    const result = await (
+      await request("/api/show?task=MOQ-CONVERSATION", "show-conversation-device")
+    ).json<Array<{ links: unknown[] }>>();
+    expect(result).toHaveLength(1);
+    expect(result[0]?.links).toHaveLength(1);
+    const firstLink = (result[0]?.links as { kind: string; ref: string }[] | undefined)?.[0];
+    expect(firstLink).toMatchObject({
+      kind: "conversation",
+      ref: slackUrl,
+    });
   });
 
   test("adds and removes workpad links", async () => {

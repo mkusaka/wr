@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as v from "valibot";
 import { ApiClient } from "../src/client.ts";
 import { setServerUrl } from "../src/config.ts";
-import { ConfigSchema } from "../src/validation.ts";
+import { ConfigSchema, SlackThreadUrlSchema } from "../src/validation.ts";
 
 describe("server URL", () => {
   test.each([
@@ -32,5 +32,25 @@ describe("server URL", () => {
 
   test("rejects an invalid server URL before writing config", () => {
     expect(() => setServerUrl("not-a-url", {})).toThrow();
+  });
+});
+
+describe("Slack thread URL", () => {
+  test.each([
+    "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890.123456",
+    "https://moqona.slack.com/archives/C0123456789/p1234567890123456",
+    "https://moqona.slack.com/archives/CABC123DE/p9999999999999999?thread_ts=9999999999.999999",
+  ])("accepts %s", (url) => {
+    expect(v.safeParse(SlackThreadUrlSchema, url).success).toBe(true);
+  });
+
+  test.each([
+    "https://example.com/not-slack",
+    "https://slack.com/archives/C0123456789/p1234567890123456",
+    "https://moqona.slack.com/archives/C0123456789/p1234567890",
+    "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890",
+    "not-a-url",
+  ])("rejects %s", (url) => {
+    expect(v.safeParse(SlackThreadUrlSchema, url).success).toBe(false);
   });
 });

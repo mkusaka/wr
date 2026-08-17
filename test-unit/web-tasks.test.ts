@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   filterLedger,
+  type ConversationLink,
   type Device,
   type PullRequest,
   type Repository,
@@ -24,6 +25,7 @@ const tasks: Task[] = [
 const runs: Run[] = [
   {
     id: "run-a",
+    cliSessionId: "session-a",
     cli: "codex",
     externalSessionId: "session-a",
     terminalId: "terminal-a",
@@ -54,23 +56,37 @@ const pullRequests: PullRequest[] = [
     worktreePaths: ["/src/example/wr/worktrees/patient"],
   },
 ];
+const conversationLinks: ConversationLink[] = [
+  {
+    id: "conversation-a",
+    cliSessionId: "session-a",
+    url: "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890.123456",
+    repoRoot: "/src/example/wr",
+    worktreePath: "/src/example/wr/worktrees/patient",
+    createdAt: "2026-08-15 12:00:00",
+    deviceIds: ["device-a"],
+    deviceNames: ["Work laptop"],
+  },
+];
 const devices: Device[] = [{ id: "device-a", name: "Work laptop" }];
 const repositories: Repository[] = [{ repoRoot: "/src/example/wr" }];
 const worktrees: Worktree[] = [{ worktreePath: "/src/example/wr/worktrees/patient" }];
-const ledger = { runs, tasks, pullRequests, devices, repositories, worktrees };
+const ledger = { runs, tasks, pullRequests, conversationLinks, devices, repositories, worktrees };
 
 describe("web ledger filters", () => {
   test.each([
-    ["", "all", "current", ["MOQ-100"], [42]],
-    ["MOQ-100", "all", "all", ["MOQ-100"], []],
-    ["patient", "all", "all", ["MOQ-100"], [42]],
-    ["example/wr#42", "all", "all", [], [42]],
-    ["https://github.com/example/wr/pull/42", "all", "all", [], [42]],
-    ["feature/patient-search", "pullRequests", "open", [], [42]],
-    ["", "tasks", "active", ["MOQ-100"], []],
+    ["", "all", "current", ["MOQ-100"], [42], ["conversation-a"]],
+    ["MOQ-100", "all", "all", ["MOQ-100"], [], []],
+    ["patient", "all", "all", ["MOQ-100"], [42], ["conversation-a"]],
+    ["example/wr#42", "all", "all", [], [42], []],
+    ["https://github.com/example/wr/pull/42", "all", "all", [], [42], []],
+    ["feature/patient-search", "pullRequests", "open", [], [42], []],
+    ["", "tasks", "active", ["MOQ-100"], [], []],
+    ["moqona.slack.com", "conversations", "all", [], [], ["conversation-a"]],
+    ["C0123456789", "all", "all", [], [], ["conversation-a"]],
   ])(
     "filters query %s, type %s, and state %s",
-    (query, type, state, expectedTasks, expectedPullRequests) => {
+    (query, type, state, expectedTasks, expectedPullRequests, expectedConversations) => {
       const result = filterLedger(ledger, {
         query,
         type,
@@ -82,6 +98,9 @@ describe("web ledger filters", () => {
       expect(result.tasks.map((task) => task.issueId)).toEqual(expectedTasks);
       expect(result.pullRequests.map((pullRequest) => pullRequest.number)).toEqual(
         expectedPullRequests,
+      );
+      expect(result.conversationLinks.map((conversation) => conversation.id)).toEqual(
+        expectedConversations,
       );
     },
   );
@@ -110,6 +129,9 @@ describe("web ledger filters", () => {
     expect(result.tasks.map((task) => task.issueId)).toEqual(["MOQ-100", "MOQ-101"]);
     expect(result.pullRequests.map((pullRequest) => pullRequest.number)).toEqual([42]);
     expect(result.runs.map((run) => run.id)).toEqual(["run-a"]);
+    expect(result.conversationLinks.map((conversation) => conversation.id)).toEqual([
+      "conversation-a",
+    ]);
   });
 
   test("filters runs by query", () => {
@@ -139,5 +161,8 @@ describe("web ledger filters", () => {
     });
     expect(result.tasks.map((task) => task.issueId)).toEqual(["MOQ-100"]);
     expect(result.pullRequests.map((pullRequest) => pullRequest.number)).toEqual([42]);
+    expect(result.conversationLinks.map((conversation) => conversation.id)).toEqual([
+      "conversation-a",
+    ]);
   });
 });

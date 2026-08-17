@@ -63,5 +63,39 @@ export const ITermSessionListSchema = v.array(v.object({ id: NonEmptyStringSchem
 
 export const PositiveIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 
+const slackHostPattern = /^[a-z0-9-]+\.slack\.com$/;
+const slackArchivePattern = /^\/archives\/([A-Z0-9]+)\/p(\d{16})$/;
+const slackTsPattern = /^\d+\.\d{6}$/;
+
+export function slackConversationKey(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (!slackHostPattern.test(parsed.hostname)) return undefined;
+    const match = parsed.pathname.match(slackArchivePattern);
+    if (!match) return undefined;
+    const channelId = match[1]!;
+    const pTimestamp = match[2]!;
+    const threadTs = parsed.searchParams.get("thread_ts");
+    if (threadTs) {
+      if (!slackTsPattern.test(threadTs)) return undefined;
+      return `${channelId}/${threadTs}`;
+    }
+    const derivedTs = `${pTimestamp.slice(0, 10)}.${pTimestamp.slice(10, 16)}`;
+    if (!slackTsPattern.test(derivedTs)) return undefined;
+    return `${channelId}/${derivedTs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export const SlackThreadUrlSchema = v.pipe(
+  v.string(),
+  v.url(),
+  v.check(
+    (value) => slackConversationKey(value) !== undefined,
+    "URL must be a Slack thread permalink",
+  ),
+);
+
 export type HookPayload = v.InferOutput<typeof HookPayloadSchema>;
 export type Config = v.InferOutput<typeof ConfigSchema>;

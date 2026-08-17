@@ -264,3 +264,29 @@ export const workpadLinks = sqliteTable(
     ),
   ],
 );
+
+export const conversationLinks = sqliteTable(
+  "conversation_links",
+  {
+    id: text().primaryKey(),
+    deviceId: text("device_id")
+      .notNull()
+      .references(() => devices.id),
+    cliSessionId: text("cli_session_id")
+      .notNull()
+      .references(() => cliSessions.id),
+    checkoutId: text("checkout_id").references(() => checkouts.id),
+    provider: text({ enum: ["slack"] }).notNull(),
+    externalKey: text("external_key").notNull(),
+    url: text().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("conversation_links_device_session_provider_external_unique").on(
+      table.deviceId,
+      table.cliSessionId,
+      table.provider,
+      table.externalKey,
+    ),
+  ],
+);

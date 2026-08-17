@@ -3,6 +3,7 @@ import {
   NonEmptyStringSchema,
   PullRequestStateSchema,
   SessionIdentitySchema,
+  SlackThreadUrlSchema,
 } from "./validation.ts";
 
 export const CheckoutInputSchema = v.object({
@@ -45,6 +46,13 @@ export type FocusTarget = {
   prUrls: string;
   startedCwd: string | null;
 };
+
+export const ConversationLinkInputSchema = v.object({
+  url: SlackThreadUrlSchema,
+  context: ContextInputSchema,
+});
+
+export type ConversationLinkInput = v.InferOutput<typeof ConversationLinkInputSchema>;
 
 export type ShowTask = {
   linearIssueId: string;

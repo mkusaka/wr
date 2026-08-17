@@ -8,6 +8,7 @@ import * as v from "valibot";
 import {
   CheckoutInputSchema,
   ContextInputSchema,
+  ConversationLinkInputSchema,
   PullRequestInputSchema,
   type CheckoutInput,
   type ContextInput,
@@ -16,6 +17,7 @@ import {
   CliSchema,
   HookPayloadSchema,
   NonEmptyStringSchema,
+  slackConversationKey,
   TaskStatusSchema,
 } from "../src/validation.ts";
 import { authenticateAccess, type Env, type Principal } from "./auth.ts";
@@ -980,6 +982,64 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     return c.json({ removed: true });
   });
 
+  app.post("/api/conversation-links", async (c) => {
+    const deviceId = requireDevice(c.get("deviceId"));
+    const db = drizzle(c.env.DB, { schema });
+    const value = await requestBody(c);
+    const input = v.parse(ConversationLinkInputSchema, value);
+    const current = await resolveContext(db, deviceId, input.context);
+    const externalKey = slackConversationKey(input.url);
+    if (!externalKey) throw new HTTPException(400, { message: "Invalid Slack thread URL" });
+    await db
+      .insert(schema.conversationLinks)
+      .values({
+        id: id(),
+        deviceId,
+        cliSessionId: current.sessionId,
+        checkoutId: current.checkoutId,
+        provider: "slack",
+        externalKey,
+        url: input.url,
+      })
+      .onConflictDoNothing();
+    return c.json({ linked: true });
+  });
+
+  app.delete("/api/conversation-links", async (c) => {
+    const deviceId = requireDevice(c.get("deviceId"));
+    const db = drizzle(c.env.DB, { schema });
+    const value = await requestBody(c);
+    const input = v.parse(ConversationLinkInputSchema, value);
+    if (!input.context.session) {
+      throw new HTTPException(400, { message: "Could not resolve a session" });
+    }
+    const session = await db
+      .select({ id: schema.cliSessions.id })
+      .from(schema.cliSessions)
+      .where(
+        and(
+          eq(schema.cliSessions.deviceId, deviceId),
+          eq(schema.cliSessions.cli, input.context.session.cli),
+          eq(schema.cliSessions.externalSessionId, input.context.session.externalSessionId),
+        ),
+      )
+      .get();
+    if (!session) return c.json({ removed: false }, 404);
+    const externalKey = slackConversationKey(input.url);
+    if (!externalKey) throw new HTTPException(400, { message: "Invalid Slack thread URL" });
+    await db
+      .delete(schema.conversationLinks)
+      .where(
+        and(
+          eq(schema.conversationLinks.deviceId, deviceId),
+          eq(schema.conversationLinks.cliSessionId, session.id),
+          eq(schema.conversationLinks.provider, "slack"),
+          eq(schema.conversationLinks.externalKey, externalKey),
+        ),
+      );
+    return c.json({ removed: true });
+  });
+
   app.get("/api/pull-requests", async (c) => {
     const db = drizzle(c.env.DB, { schema });
     const userId = c.get("userId");
@@ -1266,24 +1326,40 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             .where(scopedDevice(schema.executions.deviceId, userId, deviceId, all))
             .orderBy(desc(schema.executions.startedAt)),
         );
-      case "links":
+      case "links": {
+        const workpadLinks = await db
+          .select({
+            id: schema.workpadLinks.id,
+            linearIssueId: schema.tasks.issueId,
+            repoRoot: schema.checkouts.repoRoot,
+            worktreePath: schema.checkouts.worktreePath,
+            kind: sql<string>`'workpad'`,
+            ref: schema.workpadLinks.ref,
+            createdAt: schema.workpadLinks.createdAt,
+          })
+          .from(schema.workpadLinks)
+          .leftJoin(schema.tasks, eq(schema.tasks.id, schema.workpadLinks.taskId))
+          .innerJoin(schema.checkouts, eq(schema.checkouts.id, schema.workpadLinks.checkoutId))
+          .where(scopedDevice(schema.workpadLinks.deviceId, userId, deviceId, all));
+        const conversationLinks = await db
+          .select({
+            id: schema.conversationLinks.id,
+            linearIssueId: sql<string | null>`null`,
+            repoRoot: schema.checkouts.repoRoot,
+            worktreePath: schema.checkouts.worktreePath,
+            kind: sql<string>`'conversation'`,
+            ref: schema.conversationLinks.url,
+            createdAt: schema.conversationLinks.createdAt,
+          })
+          .from(schema.conversationLinks)
+          .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
+          .where(scopedDevice(schema.conversationLinks.deviceId, userId, deviceId, all));
         return c.json(
-          await db
-            .select({
-              id: schema.workpadLinks.id,
-              linearIssueId: schema.tasks.issueId,
-              repoRoot: schema.checkouts.repoRoot,
-              worktreePath: schema.checkouts.worktreePath,
-              kind: sql<string>`'workpad'`,
-              ref: schema.workpadLinks.ref,
-              createdAt: schema.workpadLinks.createdAt,
-            })
-            .from(schema.workpadLinks)
-            .leftJoin(schema.tasks, eq(schema.tasks.id, schema.workpadLinks.taskId))
-            .innerJoin(schema.checkouts, eq(schema.checkouts.id, schema.workpadLinks.checkoutId))
-            .where(scopedDevice(schema.workpadLinks.deviceId, userId, deviceId, all))
-            .orderBy(desc(schema.workpadLinks.createdAt)),
+          [...workpadLinks, ...conversationLinks].toSorted((a, b) =>
+            b.createdAt.localeCompare(a.createdAt),
+          ),
         );
+      }
       case "repos":
         return c.json(
           await db
@@ -1456,16 +1532,35 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             .leftJoin(parentPullRequests, eq(parentPullRequests.id, schema.pullRequests.parentPrId))
             .where(eq(schema.taskPullRequests.taskId, task.id))
             .orderBy(schema.pullRequests.number),
-          links: await db
-            .select({ kind: sql<string>`'workpad'`, ref: schema.workpadLinks.ref })
-            .from(schema.workpadLinks)
-            .where(
-              and(
-                deviceScope(schema.workpadLinks.deviceId, userId),
-                eq(schema.workpadLinks.taskId, task.id),
-              ),
-            )
-            .orderBy(schema.workpadLinks.createdAt),
+          links: [
+            ...(await db
+              .select({ kind: sql<string>`'workpad'`, ref: schema.workpadLinks.ref })
+              .from(schema.workpadLinks)
+              .where(
+                and(
+                  deviceScope(schema.workpadLinks.deviceId, userId),
+                  eq(schema.workpadLinks.taskId, task.id),
+                ),
+              )
+              .orderBy(schema.workpadLinks.createdAt)),
+            ...(await db
+              .selectDistinct({
+                kind: sql<string>`'conversation'`,
+                ref: schema.conversationLinks.url,
+              })
+              .from(schema.conversationLinks)
+              .innerJoin(
+                schema.executions,
+                eq(schema.executions.cliSessionId, schema.conversationLinks.cliSessionId),
+              )
+              .where(
+                and(
+                  deviceScope(schema.conversationLinks.deviceId, userId),
+                  eq(schema.executions.taskId, task.id),
+                ),
+              )
+              .orderBy(schema.conversationLinks.createdAt)),
+          ],
         })),
       ),
     );
@@ -1477,9 +1572,26 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const selectedDevice = c.req.query("device");
     const selectedRepository = c.req.query("repo");
     const selectedWorktree = c.req.query("worktree");
+    const conversationLinkRows = await db
+      .select({
+        id: schema.conversationLinks.id,
+        cliSessionId: schema.conversationLinks.cliSessionId,
+        url: schema.conversationLinks.url,
+        repoRoot: schema.checkouts.repoRoot,
+        worktreePath: schema.checkouts.worktreePath,
+        createdAt: schema.conversationLinks.createdAt,
+        deviceId: schema.conversationLinks.deviceId,
+        deviceName: schema.devices.name,
+      })
+      .from(schema.conversationLinks)
+      .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
+      .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
+      .where(deviceScope(schema.conversationLinks.deviceId, userId))
+      .orderBy(desc(schema.conversationLinks.createdAt));
     const runRows = await db
       .select({
         id: schema.sessionRuns.id,
+        cliSessionId: schema.sessionRuns.cliSessionId,
         cli: schema.cliSessions.cli,
         externalSessionId: schema.cliSessions.externalSessionId,
         terminalId: schema.sessionRuns.terminalId,
@@ -1600,6 +1712,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       user: { email: c.get("principal").email ?? null },
       runs: runRows.map((run) => ({
         id: run.id,
+        cliSessionId: run.cliSessionId,
         cli: run.cli,
         externalSessionId: run.externalSessionId,
         terminalId: run.terminalId,
@@ -1613,6 +1726,16 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         deviceNames: [run.deviceName],
         repoRoots: JSON.parse(run.repoRoots),
         worktreePaths: JSON.parse(run.worktreePaths),
+      })),
+      conversationLinks: conversationLinkRows.map((conversationLink) => ({
+        id: conversationLink.id,
+        cliSessionId: conversationLink.cliSessionId,
+        url: conversationLink.url,
+        repoRoot: conversationLink.repoRoot,
+        worktreePath: conversationLink.worktreePath,
+        createdAt: conversationLink.createdAt,
+        deviceIds: [conversationLink.deviceId],
+        deviceNames: [conversationLink.deviceName],
       })),
       tasks: taskRows.map((task) => ({
         issueId: task.issueId,

@@ -699,6 +699,34 @@ const commandParser = or(
         ),
         { description: message`Manage workpad links.` },
       ),
+      command(
+        "conversation",
+        or(
+          command(
+            "add",
+            object({
+              action: constant("link-conversation-add"),
+              url: argument(textValue, { description: message`Slack thread URL.` }),
+              session: optional(
+                option("--session", textValue, { description: message`CLI session ID.` }),
+              ),
+            }),
+            { description: message`Register a conversation link.` },
+          ),
+          command(
+            "remove",
+            object({
+              action: constant("link-conversation-remove"),
+              url: argument(textValue, { description: message`Slack thread URL.` }),
+              session: optional(
+                option("--session", textValue, { description: message`CLI session ID.` }),
+              ),
+            }),
+            { description: message`Remove a conversation link.` },
+          ),
+        ),
+        { description: message`Manage conversation links.` },
+      ),
       // TODO: Remove after callers migrate from `wr link remove workpad REF`.
       command(
         "remove",
@@ -1046,6 +1074,28 @@ try {
       console.log(`removed workpad=${ref} task=${cli.task ?? "none"}`);
       break;
     }
+    case "link-conversation-add":
+      requireEnabledRepository(process.cwd());
+      await client().request("/api/conversation-links", {
+        method: "POST",
+        body: JSON.stringify({
+          url: cli.url,
+          context: currentContext(process.cwd(), cli.session),
+        }),
+      });
+      console.log(`linked conversation=${cli.url}`);
+      break;
+    case "link-conversation-remove":
+      requireEnabledRepository(process.cwd());
+      await client().request("/api/conversation-links", {
+        method: "DELETE",
+        body: JSON.stringify({
+          url: cli.url,
+          context: currentContext(process.cwd(), cli.session),
+        }),
+      });
+      console.log(`removed conversation=${cli.url} session=${cli.session ?? "current"}`);
+      break;
     case "legacy-link-remove":
       if (cli.kind !== "workpad") throw new Error(`Unknown link kind: ${cli.kind}`);
       requireEnabledRepository(process.cwd());
