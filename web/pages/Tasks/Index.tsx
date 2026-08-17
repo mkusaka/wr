@@ -959,6 +959,11 @@ export default function TasksIndex({
                     </CardHeader>
                   </button>
                   <CardContent>
+                    {pullRequest.deviceNames.length > 0 ? (
+                      <p className="mb-2 text-xs text-muted-foreground">
+                        Devices: {pullRequest.deviceNames.join(", ")}
+                      </p>
+                    ) : null}
                     <a
                       className="break-all text-xs text-primary underline-offset-4 hover:underline"
                       href={pullRequest.url}

@@ -1,6 +1,6 @@
 ---
 name: ops-wr
-description: Operate the wr relationship-ledger CLI to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use for routine task tracking, attaching or removing artifacts, listing related records, synchronizing explicitly, focusing an iTerm2 pane, or diagnosing ambiguous task context.
+description: Operate the wr relationship-ledger CLI and the paired Linear/Jira task workflow to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use for routine task tracking, attaching or removing artifacts, listing related records, synchronizing explicitly, focusing an iTerm2 pane, or diagnosing ambiguous task context.
 ---
 
 # Operate wr
@@ -77,6 +77,13 @@ If session discovery fails, pass the existing session ID with `--session`. Do no
 
 ## Track task work
 
+For substantive work, register the task in both systems before starting execution:
+
+1. Find or create the corresponding Linear issue using the Linear skill.
+2. Find or create the corresponding Jira issue using the available Jira/Atlassian skill. Reuse an existing Jira issue when one already represents the same work; do not create duplicates.
+3. Record both issue keys in the task's workpad or the user-facing handoff. `wr` stores the Linear issue identifier as its task key and has no Jira field; do not invent a `wr` option for Jira.
+4. Start and manage the `wr` relationship from the Linear issue key.
+
 Start an execution after selecting the task and checkout:
 
 ```bash
@@ -97,6 +104,8 @@ Cancel a task only when work on it should stop, abandoning its active executions
 ```bash
 wr task cancel MAL-123
 ```
+
+When completing or cancelling work, update both the Linear and Jira issues to the corresponding final state. If the Jira connector or project mapping is unavailable, stop before claiming task registration is complete and report the missing Jira registration.
 
 Starting a completed task reopens it and reports that change. Completing a task finishes its execution in the current CLI session and abandons active executions for the same task in other sessions. It does not alter executions for other tasks.
 

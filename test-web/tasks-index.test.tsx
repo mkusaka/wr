@@ -96,6 +96,7 @@ describe("TasksIndex", () => {
   test("shows current tasks and pull requests by default", () => {
     renderPage();
 
+    expect(screen.getByText("Devices: Work laptop")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Current State/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Runs\s*1/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();

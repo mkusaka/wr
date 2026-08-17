@@ -14,6 +14,7 @@ Run the adoption from inside the session being registered. Do not register anoth
 Before changing the ledger, enumerate every item the current agent remembers for this session:
 
 - Linear issue identifiers and titles
+- Jira issue keys and titles
 - worktree paths and branches
 - pull request numbers, repositories, and stack parents
 - workpad paths and other known task links
@@ -45,6 +46,8 @@ wr show --session "${CLAUDE_CODE_SESSION_ID}"
 If `CLAUDE_CODE_SESSION_ID` is empty, or automatic discovery conflicts with the explicit ID, stop and report the condition. Do not inspect transcript storage or force an identity.
 
 ## Register every remembered relationship
+
+For every remembered task, verify that its paired Jira issue is known. If the Jira issue is missing, find or create the corresponding Jira issue before registering the `wr` relationship. Record the Jira key in the adoption report; `wr` relationships continue to use the Linear issue identifier.
 
 For every remembered task/worktree pair, create the execution in the same session. Missing session and task records are created by these mutating commands when the operation requires them:
 
