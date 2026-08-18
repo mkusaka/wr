@@ -200,21 +200,23 @@ async function resolveContext(db: Database, deviceId: string, context: ContextIn
           ),
         )
         .get()
-    : await db
-        .select({ id: schema.sessionRuns.id })
-        .from(schema.sessionRuns)
-        .where(
-          and(
-            eq(schema.sessionRuns.deviceId, deviceId),
-            eq(schema.sessionRuns.cliSessionId, sessionId),
-            isNull(schema.sessionRuns.endedAt),
-            context.terminalId ? eq(schema.sessionRuns.terminalId, context.terminalId) : undefined,
-          ),
-        )
-        .orderBy(desc(schema.sessionRuns.lastSeenAt))
-        .get();
+    : undefined;
   if (!run) {
-    if (context.runId) throw new HTTPException(404, { message: "No active session run found" });
+    run = await db
+      .select({ id: schema.sessionRuns.id })
+      .from(schema.sessionRuns)
+      .where(
+        and(
+          eq(schema.sessionRuns.deviceId, deviceId),
+          eq(schema.sessionRuns.cliSessionId, sessionId),
+          isNull(schema.sessionRuns.endedAt),
+          context.terminalId ? eq(schema.sessionRuns.terminalId, context.terminalId) : undefined,
+        ),
+      )
+      .orderBy(desc(schema.sessionRuns.lastSeenAt))
+      .get();
+  }
+  if (!run) {
     const runId = id();
     await db.insert(schema.sessionRuns).values({
       id: runId,

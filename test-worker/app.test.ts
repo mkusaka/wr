@@ -601,7 +601,7 @@ describe("wr Worker API", () => {
     ).toBe(400);
   });
 
-  test("rejects runs from another session or an ended run in context", async () => {
+  test("falls back from a stale or ended runId to an active or implicit run", async () => {
     const firstPayload = { session_id: "first-session", cwd: "/src/example", source: "startup" };
     const secondPayload = {
       session_id: "second-session",
@@ -630,7 +630,7 @@ describe("wr Worker API", () => {
           },
         })
       ).status,
-    ).toBe(404);
+    ).toBe(200);
 
     await request("/api/session-ends", "run-device", { cli: "codex", payload: firstPayload });
     expect(
@@ -643,7 +643,13 @@ describe("wr Worker API", () => {
           },
         })
       ).status,
-    ).toBe(404);
+    ).toBe(200);
+
+    const runs = await (
+      await request("/api/device/resources/runs", "run-device")
+    ).json<Array<{ id: string; status: string }>>();
+    expect(runs.filter((run) => run.status === "active")).toHaveLength(2);
+    expect(runs.filter((run) => run.id === first.runId && run.status === "active")).toHaveLength(0);
   });
 
   test("adds and removes conversation links for root and reply Slack permalinks", async () => {
