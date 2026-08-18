@@ -15,6 +15,11 @@
       "migrations_dir": "migrations",
     },
   ],
+  "observability": {
+    "traces": {
+      "enabled": true,
+    },
+  },
   "vars": {
     "ACCESS_TEAM_DOMAIN": "mkusaka.cloudflareaccess.com",
     "ACCESS_AUD": "77adda8348684685d253194212bddb0edbcc7f5166f2d3f9062f464e062bd5ac",
