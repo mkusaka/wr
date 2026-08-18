@@ -52,8 +52,6 @@ export const ConversationLinkInputSchema = v.object({
   context: ContextInputSchema,
 });
 
-export type ConversationLinkInput = v.InferOutput<typeof ConversationLinkInputSchema>;
-
 export type ShowTask = {
   linearIssueId: string;
   title: string | null;

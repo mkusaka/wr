@@ -100,7 +100,9 @@ describe("Devin session resolution", () => {
         last_activity_at INTEGER NOT NULL
       );
     `);
-    const insert = db.query("INSERT INTO sessions (id, working_directory, hidden, last_activity_at) VALUES (?, ?, 0, ?)");
+    const insert = db.query(
+      "INSERT INTO sessions (id, working_directory, hidden, last_activity_at) VALUES (?, ?, 0, ?)",
+    );
     insert.run("calm-otter", "/Users/example/other", 100);
     insert.run("polite-axolotl", projectDir, 200);
     insert.run("stale-hippo", projectDir, 100);

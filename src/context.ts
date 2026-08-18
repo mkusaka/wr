@@ -1,4 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename } from "node:path";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -118,7 +125,9 @@ export function findDevinProcessPid(startPid = process.pid, maxDepth = 10): numb
 function devinDbPath(): string | null {
   return (
     process.env.CHISEL_SESSION_DB ??
-    (process.env.HOME ? join(process.env.HOME, ".local", "share", "devin", "cli", "sessions.db") : null)
+    (process.env.HOME
+      ? join(process.env.HOME, ".local", "share", "devin", "cli", "sessions.db")
+      : null)
   );
 }
 
@@ -152,7 +161,9 @@ function findDevinSessionByPid(devinPid?: number | null): DevinSessionState | nu
   return sessions.find((s) => s.devinPid === devinPid) ?? null;
 }
 
-function applyDevinSession(data: Pick<DevinSessionState, "externalSessionId" | "runId">): SessionIdentity {
+function applyDevinSession(
+  data: Pick<DevinSessionState, "externalSessionId" | "runId">,
+): SessionIdentity {
   if (data.runId) process.env.WR_SESSION_RUN_ID = data.runId;
   return { cli: "devin", externalSessionId: data.externalSessionId };
 }
@@ -188,10 +199,7 @@ export function clearDevinSession(externalSessionId?: string, devinPid?: number 
   writeDevinSessions(remaining);
 }
 
-function resolveDevinSession(
-  env: NodeJS.ProcessEnv,
-  cwd?: string,
-): SessionIdentity | null {
+function resolveDevinSession(env: NodeJS.ProcessEnv, cwd?: string): SessionIdentity | null {
   const devinPid = env === process.env ? findDevinProcessPid() : null;
   const state = findDevinSessionByPid(devinPid);
   if (state) return applyDevinSession(state);
