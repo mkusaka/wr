@@ -23,11 +23,14 @@ import {
 } from "./config.ts";
 import {
   appendClaudeEnvironment,
+  clearDevinSession,
   currentContext,
   findCurrentSession,
+  findDevinProcessPid,
   normalizeStoredCheckout,
   normalizeStoredPath,
   parseHookPayload,
+  writeDevinSession,
   type Cli,
 } from "./context.ts";
 import { discoverCheckout } from "./git.ts";
@@ -431,6 +434,17 @@ async function runInternal(
         { cli, externalSessionId: payload.session_id },
         response.runId ?? null,
       );
+    }
+    if (action === "session-event" && cli === "devin") {
+      writeDevinSession(
+        { cli, externalSessionId: payload.session_id },
+        response.runId ?? null,
+        cwd,
+        findDevinProcessPid(),
+      );
+    }
+    if (action === "session-end" && cli === "devin") {
+      clearDevinSession(payload.session_id, findDevinProcessPid());
     }
     log("request-completed");
     log("completed");
