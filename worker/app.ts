@@ -1584,6 +1584,14 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         createdAt: schema.conversationLinks.createdAt,
         deviceId: schema.conversationLinks.deviceId,
         deviceName: schema.devices.name,
+        tasks: sql<string>`coalesce((select json_group_array(json_object('issueId', t.issue_id, 'title', t.title, 'status', t.status)) from (
+          select distinct t.issue_id, t.title, t.status
+          from executions e
+          join tasks t on t.id = e.task_id
+          where e.cli_session_id = ${sql.raw('"conversation_links"."cli_session_id"')}
+            and e.device_id in (select id from devices where user_id = ${userId})
+          order by t.issue_id
+        )), '[]')`,
       })
       .from(schema.conversationLinks)
       .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
@@ -1738,6 +1746,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         createdAt: conversationLink.createdAt,
         deviceIds: [conversationLink.deviceId],
         deviceNames: [conversationLink.deviceName],
+        tasks: JSON.parse(conversationLink.tasks),
       })),
       tasks: taskRows.map((task) => ({
         issueId: task.issueId,

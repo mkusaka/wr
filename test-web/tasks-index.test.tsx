@@ -73,6 +73,7 @@ const conversationLinks: ConversationLink[] = [
     createdAt: "2026-08-15 12:00:00",
     deviceIds: ["device-a"],
     deviceNames: ["Work laptop"],
+    tasks: [],
   },
 ];
 const pageProps = {
@@ -118,7 +119,7 @@ describe("TasksIndex", () => {
   test("shows current tasks, pull requests, and conversations by default", () => {
     renderPage();
 
-    expect(screen.getByText("Devices: Work laptop")).toBeTruthy();
+    expect(screen.getAllByText("Devices: Work laptop")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /Current State/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Runs\s*1/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();

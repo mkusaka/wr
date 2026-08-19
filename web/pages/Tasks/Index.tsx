@@ -98,6 +98,7 @@ export type ConversationLink = {
   createdAt: string;
   deviceIds: string[];
   deviceNames: string[];
+  tasks: Array<{ issueId: string; title: string | null; status: Task["status"] }>;
 };
 
 type Ledger = {
@@ -301,6 +302,8 @@ export function filterLedger(ledger: Ledger, filters: Filters) {
                   conversation.worktreePath,
                   conversation.deviceIds,
                   conversation.deviceNames,
+                  conversation.tasks.map((task) => task.issueId),
+                  conversation.tasks.map((task) => task.title),
                 ],
                 filters.query,
               ),
@@ -1233,26 +1236,51 @@ export default function TasksIndex({
             <div className="grid gap-3">
               {filtered.conversationLinks.map((conversation) => (
                 <Card key={conversation.id} size="sm">
-                  <CardContent className="grid gap-3 text-xs text-muted-foreground">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardContent className="grid gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                       <span className="break-all font-mono">{conversation.id}</span>
                       <time dateTime={conversation.createdAt}>
                         {new Date(`${conversation.createdAt}Z`).toLocaleString("en-US")}
                       </time>
                     </div>
+                    <div className="flex flex-wrap gap-2">
+                      <CopyCommand command={conversation.url} />
+                    </div>
                     <a
-                      className="break-all text-primary underline-offset-4 hover:underline"
+                      className="break-all text-xs text-primary underline-offset-4 hover:underline"
                       href={conversation.url}
                       target="_blank"
                       rel="noreferrer"
                     >
                       {conversation.url}
                     </a>
+                    {conversation.deviceNames.length > 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Devices: {conversation.deviceNames.join(", ")}
+                      </p>
+                    ) : null}
                     {conversation.repoRoot || conversation.worktreePath ? (
-                      <p className="break-all">
+                      <p className="break-all text-xs text-muted-foreground">
                         {conversation.repoRoot}
                         {conversation.worktreePath ? ` · ${conversation.worktreePath}` : ""}
                       </p>
+                    ) : null}
+                    {conversation.tasks.length > 0 ? (
+                      <section>
+                        <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                          Tasks {conversation.tasks.length}
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                          {conversation.tasks.map((task) => (
+                            <span
+                              key={task.issueId}
+                              className="rounded-md border px-2.5 py-1.5 text-xs"
+                            >
+                              {task.issueId} · {task.status}
+                            </span>
+                          ))}
+                        </div>
+                      </section>
                     ) : null}
                   </CardContent>
                 </Card>

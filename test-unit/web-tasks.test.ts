@@ -66,6 +66,7 @@ const conversationLinks: ConversationLink[] = [
     createdAt: "2026-08-15 12:00:00",
     deviceIds: ["device-a"],
     deviceNames: ["Work laptop"],
+    tasks: [{ issueId: "MOQ-100", title: "Add patient search", status: "active" }],
   },
 ];
 const devices: Device[] = [{ id: "device-a", name: "Work laptop" }];
@@ -76,7 +77,7 @@ const ledger = { runs, tasks, pullRequests, conversationLinks, devices, reposito
 describe("web ledger filters", () => {
   test.each([
     ["", "all", "current", ["MOQ-100"], [42], ["conversation-a"]],
-    ["MOQ-100", "all", "all", ["MOQ-100"], [], []],
+    ["MOQ-100", "all", "all", ["MOQ-100"], [], ["conversation-a"]],
     ["patient", "all", "all", ["MOQ-100"], [42], ["conversation-a"]],
     ["example/wr#42", "all", "all", [], [42], []],
     ["https://github.com/example/wr/pull/42", "all", "all", [], [42], []],
