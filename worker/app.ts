@@ -1584,7 +1584,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         createdAt: schema.conversationLinks.createdAt,
         deviceId: schema.conversationLinks.deviceId,
         deviceName: schema.devices.name,
-        tasks: sql<string>`coalesce((select json_group_array(json_object('issueId', t.issue_id, 'title', t.title, 'status', t.status)) from (
+        tasks: sql<string>`coalesce((select json_group_array(json_object('issueId', issue_id, 'title', title, 'status', status)) from (
           select distinct t.issue_id, t.title, t.status
           from executions e
           join tasks t on t.id = e.task_id
