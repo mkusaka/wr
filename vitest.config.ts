@@ -8,6 +8,7 @@ export default defineConfig({
       miniflare: {
         d1Databases: ["DB"],
         bindings: { TEST_MIGRATIONS: await readD1Migrations("./migrations") },
+        compatibilityDate: "2026-08-15",
       },
     })),
   ],
