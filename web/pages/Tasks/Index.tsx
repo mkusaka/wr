@@ -331,13 +331,23 @@ function isStateAvailable(type: string, state: string) {
 
 function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
   return (
     <Button
       size="xs"
       variant="outline"
       className="max-w-full justify-start"
       onPress={() => {
-        void navigator.clipboard.writeText(command).then(() => setCopied(true));
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        void navigator.clipboard.writeText(command).then(() => {
+          setCopied(true);
+          timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+        });
       }}
     >
       {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
@@ -1148,6 +1158,11 @@ export default function TasksIndex({
                                         }
                                       />
                                       <CopyCommand command={`wr run focus ${run.id}`} />
+                                      {run.terminalId ? (
+                                        <CopyCommand
+                                          command={`wr terminal focus ${run.terminalId}`}
+                                        />
+                                      ) : null}
                                     </div>
                                   </div>
                                 ))}

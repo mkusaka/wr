@@ -1384,6 +1384,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const userId = c.get("userId");
     const deviceId = c.get("deviceId");
     const db = drizzle(c.env.DB, { schema });
+    const runQuery = c.req.query("run")?.trim();
     const runs = await db
       .select({
         id: schema.sessionRuns.id,
@@ -1396,8 +1397,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .where(
         and(
           scopedDevice(schema.sessionRuns.deviceId, userId, deviceId, false),
-          isNull(schema.sessionRuns.endedAt),
           sql`${schema.sessionRuns.terminalId} IS NOT NULL`,
+          runQuery
+            ? sql`(${schema.sessionRuns.id} = ${runQuery} OR ${schema.cliSessions.cli} || ':' || ${schema.cliSessions.externalSessionId} = ${runQuery})`
+            : isNull(schema.sessionRuns.endedAt),
         ),
       )
       .orderBy(desc(schema.sessionRuns.lastSeenAt));

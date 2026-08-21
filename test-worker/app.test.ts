@@ -482,6 +482,39 @@ describe("wr Worker API", () => {
     expect(tasks[0]?.worktreePaths).toEqual(["/src/example"]);
   });
 
+  test("resolves an ended run by id or session for focus", async () => {
+    const payload = { session_id: "focus-ended-session", cwd: "/src/example", source: "startup" };
+    const start = await (
+      await request("/api/session-events", "focus-ended-device", {
+        cli: "codex",
+        payload,
+        checkout,
+        terminalId: "w0t0p0:focus-ended-terminal",
+      })
+    ).json<{ runId: string }>();
+    await request("/api/session-ends", "focus-ended-device", { cli: "codex", payload });
+
+    const byId = await request(`/api/focus-targets?run=${start.runId}`, "focus-ended-device");
+    expect(byId.status).toBe(200);
+    const byIdTargets = await byId.json<Array<{ itermSessionId: string }>>();
+    expect(byIdTargets).toHaveLength(1);
+    expect(byIdTargets[0]?.itermSessionId).toBe("w0t0p0:focus-ended-terminal");
+
+    const bySession = await request(
+      `/api/focus-targets?run=codex:${payload.session_id}`,
+      "focus-ended-device",
+    );
+    expect(bySession.status).toBe(200);
+    const bySessionTargets = await bySession.json<Array<{ itermSessionId: string }>>();
+    expect(bySessionTargets).toHaveLength(1);
+    expect(bySessionTargets[0]?.itermSessionId).toBe("w0t0p0:focus-ended-terminal");
+
+    const withoutQuery = await request("/api/focus-targets", "focus-ended-device");
+    expect(withoutQuery.status).toBe(200);
+    const defaultTargets = await withoutQuery.json<Array<unknown>>();
+    expect(defaultTargets).toHaveLength(0);
+  });
+
   test("updates execution state when tasks finish, reopen, or cancel", async () => {
     const payload = { session_id: "lifecycle-session", cwd: "/src/example", source: "startup" };
     await request("/api/session-events", "lifecycle-device", { cli: "codex", payload, checkout });

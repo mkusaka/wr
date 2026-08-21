@@ -333,12 +333,16 @@ async function runDoctor(): Promise<void> {
 
 async function focusTerminal(target: string, resolveRun: boolean): Promise<void> {
   const terminalId = resolveRun
-    ? (await client().request<FocusTarget[]>("/api/focus-targets"))
+    ? (
+        await client().request<FocusTarget[]>(
+          `/api/focus-targets?run=${encodeURIComponent(target)}`,
+        )
+      )
         .find((row) => row.id === target || row.session.includes(target))
         ?.itermSessionId.split(":")
         .at(-1)
     : target.split(":").at(-1);
-  if (!terminalId) throw new Error(`No active terminal found: ${target}`);
+  if (!terminalId) throw new Error(`No terminal found: ${target}`);
   const result = Bun.spawnSync(["it2", "session", "focus", terminalId], {
     stdout: "pipe",
     stderr: "pipe",
