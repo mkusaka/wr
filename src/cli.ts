@@ -218,9 +218,9 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
         ? "/api/pull-requests"
         : `/api/device/resources/${resource}`;
   const path = `${endpoint}${all ? "?all=true" : ""}`;
-  let rows = await client().request<Array<Record<string, unknown>>>(path);
+  const rows = await client().request<Array<Record<string, unknown>>>(path);
   const status = resourceStatus(resource, values.status);
-  rows = rows.filter((row) => {
+  const matching = rows.filter((row) => {
     const repoRoots = Array.isArray(row.repoRoots) ? row.repoRoots : [];
     const worktreePaths = Array.isArray(row.worktreePaths) ? row.worktreePaths : [];
     return (
@@ -238,14 +238,18 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
       (!values.branch || row.branch === values.branch || row.headBranch === values.branch) &&
       (!values.pr || row.number === values.pr) &&
       (!status || row.status === status || row.state === status) &&
-      (all || values.status !== undefined || isCurrentResource(resource, row)) &&
       (!values.kind || row.kind === values.kind)
     );
   });
-  if (values.limit) rows = rows.slice(0, values.limit);
+  const current =
+    all || values.status !== undefined
+      ? matching
+      : matching.filter((row) => isCurrentResource(resource, row));
+  const nonCurrentCount = matching.length - current.length;
+  let visible = values.limit ? current.slice(0, values.limit) : current;
   if (resource === "runs" || resource === "terminals") {
     const live = getLiveTerminalIds();
-    rows = rows.map((row) => ({
+    visible = visible.map((row) => ({
       ...row,
       terminalId: String(row.itermSessionId ?? "")
         .split(":")
@@ -255,14 +259,15 @@ async function runResource(resource: ResourceName, values: ResourceOptions): Pro
   }
   if (resource === "repos") {
     const enabled = new Set(readConfig().repositories);
-    rows = rows.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
+    visible = visible.map((row) => ({ ...row, enabled: enabled.has(String(row.repoRoot)) }));
   }
   console.log(
     renderResource(
       resource,
-      rows,
+      visible,
       typeof values.json === "string" ? values.json : undefined,
       values.jq,
+      nonCurrentCount,
     ),
   );
 }

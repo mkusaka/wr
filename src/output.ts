@@ -22,12 +22,18 @@ export function renderResource(
   rows: Array<Record<string, unknown>>,
   jsonFields?: string,
   jqExpression?: string,
+  nonCurrentCount?: number,
 ): string {
   if (jsonFields === undefined) {
     if (jqExpression !== undefined) throw new Error("--jq requires --json");
-    if (rows.length === 0) return `No ${resource}`;
+    const footer = nonCurrentCount ? `+ ${nonCurrentCount} non-current` : "";
+    if (rows.length === 0) {
+      const base = nonCurrentCount ? `No current ${resource}` : `No ${resource}`;
+      return footer ? `${base}\n${footer}` : base;
+    }
+    let body: string;
     if (resource === "tasks") {
-      return ["open", "active", "done", "cancelled"]
+      body = ["open", "active", "done", "cancelled"]
         .map((status) => {
           const tasks = rows.filter((row) => row.status === status);
           if (tasks.length === 0) return null;
@@ -41,14 +47,16 @@ export function renderResource(
         })
         .filter((group) => group !== null)
         .join("\n\n");
+    } else {
+      body = projectRows(resource, rows, DEFAULT_FIELDS[resource])
+        .map((row) =>
+          Object.entries(row)
+            .map(([key, value]) => `${key}=${terminalText(value)}`)
+            .join(" "),
+        )
+        .join("\n");
     }
-    return projectRows(resource, rows, DEFAULT_FIELDS[resource])
-      .map((row) =>
-        Object.entries(row)
-          .map(([key, value]) => `${key}=${terminalText(value)}`)
-          .join(" "),
-      )
-      .join("\n");
+    return footer ? `${body}\n\n${footer}` : body;
   }
 
   const fields = jsonFields

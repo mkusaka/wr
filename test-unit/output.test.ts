@@ -24,6 +24,34 @@ describe("resource output", () => {
     expect(JSON.parse(output)).toEqual([{ title: "line\nbreak" }]);
   });
 
+  test("shows non-current count at the bottom of human output", () => {
+    const output = renderResource("tasks", [], undefined, undefined, 2);
+    expect(output).toBe("No current tasks\n+ 2 non-current");
+  });
+
+  test("appends non-current count to existing human output", () => {
+    const output = renderResource(
+      "prs",
+      [{ repo: "example/repo", number: 1, state: "open", url: "https://example.test/1" }],
+      undefined,
+      undefined,
+      3,
+    );
+    expect(output).toContain("repo=example/repo");
+    expect(output).toContain("+ 3 non-current");
+  });
+
+  test("ignores non-current count in JSON output", () => {
+    const output = renderResource(
+      "tasks",
+      [{ linearIssueId: "MOQ-1", status: "open", updatedAt: "now" }],
+      "linearIssueId",
+      undefined,
+      5,
+    );
+    expect(JSON.parse(output)).toEqual([{ linearIssueId: "MOQ-1" }]);
+  });
+
   test("renders show relationships for humans", () => {
     const output = renderShow([
       {
