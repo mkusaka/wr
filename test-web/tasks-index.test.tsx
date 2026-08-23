@@ -131,6 +131,14 @@ describe("TasksIndex", () => {
     expect(new URLSearchParams(window.location.search).has("state")).toBe(false);
   });
 
+  test("shows non-current count below current results", () => {
+    const doneTask: Task = { ...pageProps.tasks[0]!, issueId: "MOQ-101", status: "done" };
+    renderPage({ ...pageProps, tasks: [...pageProps.tasks, doneTask] });
+
+    expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();
+    expect(screen.getByText("+ 1 non-current")).toBeTruthy();
+  });
+
   test("searches tasks, pull requests, and conversations by device name", async () => {
     renderPage();
 

@@ -213,101 +213,105 @@ export function filterLedger(ledger: Ledger, filters: Filters) {
     (filters.device === "all" || conversation.deviceIds.includes(filters.device)) &&
     (filters.repository === "all" || conversation.repoRoot === filters.repository) &&
     (filters.worktree === "all" || conversation.worktreePath === filters.worktree);
+  const filterByState = <T extends Run | Task | PullRequest>(
+    records: T[],
+    typeMatch: boolean,
+    isCurrent: (record: T) => boolean,
+    stateValue: (record: T) => string,
+    queryValues: (record: T) => unknown[],
+  ): { current: T[]; nonCurrent: number } => {
+    if (!typeMatch) return { current: [], nonCurrent: 0 };
+    const current: T[] = [];
+    let nonCurrent = 0;
+    for (const record of records) {
+      if (!matchesScope(record) || !matchesQuery(queryValues(record), filters.query)) continue;
+      if (filters.state === "all") {
+        current.push(record);
+      } else if (filters.state === "current") {
+        if (isCurrent(record)) current.push(record);
+        else nonCurrent++;
+      } else if (stateValue(record) === filters.state) {
+        current.push(record);
+      }
+    }
+    return { current, nonCurrent };
+  };
+  const runs = filterByState<Run>(
+    ledger.runs,
+    filters.type === "all" || filters.type === "runs",
+    (run) => run.status === "active",
+    (run) => run.status,
+    (run) => [
+      run.id,
+      run.cli,
+      run.externalSessionId,
+      run.terminalId,
+      run.startedCwd,
+      run.source,
+      run.status,
+      run.deviceIds,
+      run.deviceNames,
+      run.repoRoots,
+      run.worktreePaths,
+    ],
+  );
+  const tasks = filterByState<Task>(
+    ledger.tasks,
+    filters.type === "all" || filters.type === "tasks",
+    (task) => task.status === "open" || task.status === "active",
+    (task) => task.status,
+    (task) => [
+      task.issueId,
+      task.title,
+      task.deviceIds,
+      task.deviceNames,
+      task.repoRoots,
+      task.worktreePaths,
+    ],
+  );
+  const pullRequests = filterByState<PullRequest>(
+    ledger.pullRequests,
+    filters.type === "all" || filters.type === "pullRequests",
+    (pullRequest) => pullRequest.state === "open",
+    (pullRequest) => pullRequest.state,
+    (pullRequest) => [
+      pullRequest.repo,
+      pullRequest.number,
+      `${pullRequest.repo}#${pullRequest.number}`,
+      pullRequest.url,
+      pullRequest.headBranch,
+      pullRequest.baseBranch,
+      pullRequest.deviceIds,
+      pullRequest.deviceNames,
+      pullRequest.repoRoots,
+      pullRequest.worktreePaths,
+    ],
+  );
+  const conversationLinks =
+    filters.type !== "all" && filters.type !== "conversations"
+      ? []
+      : ledger.conversationLinks.filter(
+          (conversation) =>
+            matchesConversationScope(conversation) &&
+            matchesQuery(
+              [
+                conversation.url,
+                conversation.repoRoot,
+                conversation.worktreePath,
+                conversation.deviceIds,
+                conversation.deviceNames,
+                conversation.tasks.map((task) => task.issueId),
+                conversation.tasks.map((task) => task.title),
+              ],
+              filters.query,
+            ),
+        );
   return {
-    runs:
-      filters.type !== "all" && filters.type !== "runs"
-        ? []
-        : ledger.runs.filter(
-            (run) =>
-              (filters.state === "all" ||
-                (filters.state === "current"
-                  ? run.status === "active"
-                  : run.status === filters.state)) &&
-              matchesScope(run) &&
-              matchesQuery(
-                [
-                  run.id,
-                  run.cli,
-                  run.externalSessionId,
-                  run.terminalId,
-                  run.startedCwd,
-                  run.source,
-                  run.status,
-                  run.deviceIds,
-                  run.deviceNames,
-                  run.repoRoots,
-                  run.worktreePaths,
-                ],
-                filters.query,
-              ),
-          ),
-    tasks:
-      filters.type !== "all" && filters.type !== "tasks"
-        ? []
-        : ledger.tasks.filter(
-            (task) =>
-              (filters.state === "all" ||
-                (filters.state === "current"
-                  ? task.status === "open" || task.status === "active"
-                  : task.status === filters.state)) &&
-              matchesScope(task) &&
-              matchesQuery(
-                [
-                  task.issueId,
-                  task.title,
-                  task.deviceIds,
-                  task.deviceNames,
-                  task.repoRoots,
-                  task.worktreePaths,
-                ],
-                filters.query,
-              ),
-          ),
-    pullRequests:
-      filters.type !== "all" && filters.type !== "pullRequests"
-        ? []
-        : ledger.pullRequests.filter(
-            (pullRequest) =>
-              (filters.state === "all" ||
-                (filters.state === "current"
-                  ? pullRequest.state === "open"
-                  : pullRequest.state === filters.state)) &&
-              matchesScope(pullRequest) &&
-              matchesQuery(
-                [
-                  pullRequest.repo,
-                  pullRequest.number,
-                  `${pullRequest.repo}#${pullRequest.number}`,
-                  pullRequest.url,
-                  pullRequest.headBranch,
-                  pullRequest.baseBranch,
-                  pullRequest.deviceIds,
-                  pullRequest.deviceNames,
-                  pullRequest.repoRoots,
-                  pullRequest.worktreePaths,
-                ],
-                filters.query,
-              ),
-          ),
-    conversationLinks:
-      filters.type !== "all" && filters.type !== "conversations"
-        ? []
-        : ledger.conversationLinks.filter(
-            (conversation) =>
-              matchesConversationScope(conversation) &&
-              matchesQuery(
-                [
-                  conversation.url,
-                  conversation.repoRoot,
-                  conversation.worktreePath,
-                  conversation.deviceIds,
-                  conversation.deviceNames,
-                  conversation.tasks.map((task) => task.issueId),
-                  conversation.tasks.map((task) => task.title),
-                ],
-                filters.query,
-              ),
-          ),
+    runs: runs.current,
+    tasks: tasks.current,
+    pullRequests: pullRequests.current,
+    conversationLinks,
+    nonCurrentTotal: runs.nonCurrent + tasks.nonCurrent + pullRequests.nonCurrent,
   };
 }
 
@@ -441,6 +445,7 @@ export default function TasksIndex({
     filtered.tasks.length +
     filtered.pullRequests.length +
     filtered.conversationLinks.length;
+  const nonCurrentTotal = filtered.nonCurrentTotal;
   const globalSearch = queryState.global ? "&global=true" : "";
   const searchDevices = (value: string) => {
     const request = ++deviceRequest.current;
@@ -1307,9 +1312,16 @@ export default function TasksIndex({
         {filteredTotal === 0 ? (
           <Card size="sm">
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              No records match these filters.
+              {nonCurrentTotal > 0
+                ? "No current records match these filters."
+                : "No records match these filters."}
             </CardContent>
           </Card>
+        ) : null}
+        {nonCurrentTotal > 0 ? (
+          <p className="text-center text-sm text-muted-foreground">
+            + {nonCurrentTotal} non-current
+          </p>
         ) : null}
       </div>
     </main>

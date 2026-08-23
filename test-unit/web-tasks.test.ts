@@ -133,6 +133,27 @@ describe("web ledger filters", () => {
     expect(result.conversationLinks.map((conversation) => conversation.id)).toEqual([
       "conversation-a",
     ]);
+    expect(result.nonCurrentTotal).toBe(2);
+  });
+
+  test("non-current total is zero when state is not current", () => {
+    const result = filterLedger(
+      {
+        ...ledger,
+        tasks: [...tasks, { ...tasks[0]!, issueId: "MOQ-101", status: "done" }],
+      },
+      {
+        query: "",
+        type: "all",
+        state: "all",
+        device: "all",
+        repository: "all",
+        worktree: "all",
+      },
+    );
+
+    expect(result.tasks.map((task) => task.issueId)).toEqual(["MOQ-100", "MOQ-101"]);
+    expect(result.nonCurrentTotal).toBe(0);
   });
 
   test("filters runs by query", () => {
