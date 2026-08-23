@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import * as v from "valibot";
 import { ApiClient } from "../src/client.ts";
 import { setServerUrl } from "../src/config.ts";
-import { ConfigSchema, SlackThreadUrlSchema } from "../src/validation.ts";
+import {
+  ConfigSchema,
+  extractPullRequestUrls,
+  extractSlackThreadUrls,
+  isPullRequestCreateCommand,
+  SlackThreadUrlSchema,
+  toolResponseText,
+} from "../src/validation.ts";
 
 describe("server URL", () => {
   test.each([
@@ -52,5 +59,45 @@ describe("Slack thread URL", () => {
     "not-a-url",
   ])("rejects %s", (url) => {
     expect(v.safeParse(SlackThreadUrlSchema, url).success).toBe(false);
+  });
+
+  test("extracts and deduplicates Slack thread permalinks", () => {
+    expect(
+      extractSlackThreadUrls(
+        "See https://moqona.slack.com/archives/C0123456789/p1234567890123456 and " +
+          "https://moqona.slack.com/archives/C0123456789/p1234567890123456?thread_ts=1234567890.123456, " +
+          "https://example.com/not-slack.",
+      ),
+    ).toEqual(["https://moqona.slack.com/archives/C0123456789/p1234567890123456"]);
+  });
+});
+
+describe("PostToolUse output", () => {
+  test.each([
+    ["output", "output"],
+    [{ output: "output", stdout: "stdout" }, "output"],
+    [{ stdout: "stdout" }, "stdout"],
+    [{ output: 1 }, ""],
+    [null, ""],
+  ])("extracts text from %j", (value, expected) => {
+    expect(toolResponseText(value)).toBe(expected);
+  });
+
+  test("recognizes gh pr create commands", () => {
+    expect(isPullRequestCreateCommand("gh pr create --title change")).toBe(true);
+    expect(isPullRequestCreateCommand("gh pr view 123")).toBe(false);
+  });
+
+  test("extracts and deduplicates pull request URLs", () => {
+    expect(
+      extractPullRequestUrls(
+        "https://github.com/owner/repo/pull/12 and " +
+          "https://github.com/owner/repo/pull/12, " +
+          "https://github.com/other/project/pull/7",
+      ),
+    ).toEqual([
+      { repo: "owner/repo", number: 12, url: "https://github.com/owner/repo/pull/12" },
+      { repo: "other/project", number: 7, url: "https://github.com/other/project/pull/7" },
+    ]);
   });
 });

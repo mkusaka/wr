@@ -7,6 +7,7 @@ import {
   findCurrentSession,
   normalizeStoredPath,
   parseHookPayload,
+  parseToolHookPayload,
   writeDevinSession,
 } from "../src/context.ts";
 
@@ -46,6 +47,26 @@ describe("session discovery", () => {
     expect(() => parseHookPayload(JSON.stringify({ session_id: "polite-axolotl" }))).toThrow(
       "Invalid hook payload",
     );
+  });
+
+  test("fills Devin tool hook payload cwd from the project directory", () => {
+    expect(
+      parseToolHookPayload(
+        JSON.stringify({
+          session_id: "polite-axolotl",
+          tool_name: "exec",
+          tool_input: { command: "gh pr create" },
+          tool_response: { success: true, output: "created" },
+        }),
+        "/Users/example/project",
+      ),
+    ).toEqual({
+      session_id: "polite-axolotl",
+      cwd: "/Users/example/project",
+      tool_name: "exec",
+      tool_input: { command: "gh pr create" },
+      tool_response: { success: true, output: "created" },
+    });
   });
 });
 

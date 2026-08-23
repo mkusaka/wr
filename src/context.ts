@@ -12,7 +12,13 @@ import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import type { ContextInput, SessionIdentity } from "./api.ts";
 import { discoverCheckout, type Checkout } from "./git.ts";
-import { HookPayloadSchema, SessionIdentitySchema, type HookPayload } from "./validation.ts";
+import {
+  HookPayloadSchema,
+  SessionIdentitySchema,
+  ToolHookPayloadSchema,
+  type HookPayload,
+  type ToolHookPayload,
+} from "./validation.ts";
 
 export type Cli = "codex" | "claude" | "devin";
 
@@ -283,6 +289,24 @@ export function parseHookPayload(text: string, defaultCwd?: string): HookPayload
       return v.parse(HookPayloadSchema, { ...value, cwd: defaultCwd });
     }
     return v.parse(HookPayloadSchema, value);
+  } catch {
+    throw new Error("Invalid hook payload");
+  }
+}
+
+export function parseToolHookPayload(text: string, defaultCwd?: string): ToolHookPayload {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (
+      defaultCwd &&
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      !("cwd" in value)
+    ) {
+      return v.parse(ToolHookPayloadSchema, { ...value, cwd: defaultCwd });
+    }
+    return v.parse(ToolHookPayloadSchema, value);
   } catch {
     throw new Error("Invalid hook payload");
   }

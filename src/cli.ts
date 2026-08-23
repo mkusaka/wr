@@ -30,6 +30,7 @@ import {
   normalizeStoredCheckout,
   normalizeStoredPath,
   parseHookPayload,
+  parseToolHookPayload,
   writeDevinSession,
   type Cli,
 } from "./context.ts";
@@ -40,6 +41,9 @@ import { WrUi } from "./ui.tsx";
 import {
   CliSchema,
   ExecutionStatusSchema,
+  extractPullRequestUrls,
+  extractSlackThreadUrls,
+  isPullRequestCreateCommand,
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
@@ -50,6 +54,8 @@ import {
   RunStatusSchema,
   ServerUrlSchema,
   TaskStatusSchema,
+  toolResponseText,
+  type ToolHookPayload,
 } from "./validation.ts";
 
 type ResourceOptions = {
@@ -290,6 +296,20 @@ async function syncSessionRuns(): Promise<void> {
   console.log(`synced runs=${result.ended}`);
 }
 
+function hookStatus(contents: string, cli: Cli): string {
+  const missing = (
+    [
+      ["event", `wr internal session-event --cli ${cli}`],
+      ["prompt", `wr internal session-prompt --cli ${cli}`],
+      ["end", `wr internal session-end --cli ${cli}`],
+      ["tool", `wr internal tool-event --cli ${cli}`],
+    ] as const
+  )
+    .filter(([, hookCommand]) => !contents.includes(hookCommand))
+    .map(([eventName]) => eventName);
+  return missing.length === 0 ? "configured" : `missing:${missing.join(",")}`;
+}
+
 async function runDoctor(): Promise<void> {
   const checkout = discoverCheckout(process.cwd());
   const lines: string[] = [];
@@ -328,7 +348,7 @@ async function runDoctor(): Promise<void> {
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
     lines.push(
-      `hooks claude=${claude.includes("wr internal session-event --cli claude") && claude.includes("wr internal session-prompt --cli claude") && claude.includes("wr internal session-end --cli claude") ? "configured" : "missing"} codex=${codex.includes("wr internal session-event --cli codex") && codex.includes("wr internal session-prompt --cli codex") && codex.includes("wr internal session-end --cli codex") ? "configured" : "missing"} devin=${devin.includes("wr internal session-event --cli devin") && devin.includes("wr internal session-prompt --cli devin") && devin.includes("wr internal session-end --cli devin") ? "configured" : "missing"}`,
+      `hooks claude=${hookStatus(claude, "claude")} codex=${hookStatus(codex, "codex")} devin=${hookStatus(devin, "devin")}`,
     );
   } else {
     lines.push("hooks claude=unknown codex=unknown devin=unknown");
@@ -358,7 +378,7 @@ async function focusTerminal(target: string, resolveRun: boolean): Promise<void>
 }
 
 async function runInternal(
-  action: "session-event" | "session-prompt" | "session-end",
+  action: "session-event" | "session-prompt" | "session-end" | "tool-event",
   cliValue: string,
 ): Promise<void> {
   const startedAt = performance.now();
@@ -396,24 +416,72 @@ async function runInternal(
     const result = v.safeParse(CliSchema, cliValue);
     if (!result.success) throw new Error("--cli must be codex, claude, or devin");
     const cli: Cli = result.output;
-    const payload = parseHookPayload(
-      payloadText,
-      cli === "devin" ? process.env.DEVIN_PROJECT_DIR : undefined,
-    );
-    log("parse-completed", { source: payload.source });
+    const payload =
+      action === "tool-event"
+        ? parseToolHookPayload(
+            payloadText,
+            cli === "devin" ? process.env.DEVIN_PROJECT_DIR : undefined,
+          )
+        : parseHookPayload(
+            payloadText,
+            cli === "devin" ? process.env.DEVIN_PROJECT_DIR : undefined,
+          );
+    log("parse-completed", { source: "source" in payload ? payload.source : undefined });
+
+    // PostToolUse fires for every tool call, so reject on the payload alone before
+    // isRepositoryEnabled spawns git through discoverCheckout.
+    if (action === "tool-event") {
+      const toolPayload = payload as ToolHookPayload;
+      const toolCommand = toolPayload.tool_input?.command;
+      if (!toolCommand || !isPullRequestCreateCommand(toolCommand)) {
+        log("tool-event-ignored", { reason: "not-pull-request-create" });
+        return;
+      }
+      const urls = extractPullRequestUrls(toolResponseText(toolPayload.tool_response));
+      if (urls.length !== 1) {
+        log("tool-event-ignored", { reason: "pull-request-url-count", count: urls.length });
+        return;
+      }
+      log("repository-check-start");
+      if (!isRepositoryEnabled(toolPayload.cwd)) {
+        log("repository-disabled");
+        return;
+      }
+      log("repository-check-completed");
+      log("request-start");
+      const cwd = realpathSync(toolPayload.cwd);
+      const { repo, number } = urls[0]!;
+      await client().request("/api/pull-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          pullRequest: loadPullRequest(repo, number, cwd),
+          context: {
+            session: { cli, externalSessionId: toolPayload.session_id },
+            runId: process.env.WR_SESSION_RUN_ID,
+            checkout: normalizeStoredCheckout(discoverCheckout(cwd)),
+            terminalId: process.env.TERM_SESSION_ID,
+          },
+        }),
+      });
+      log("request-completed");
+      log("completed");
+      return;
+    }
+
+    const hookPayload = payload as ReturnType<typeof parseHookPayload>;
     if (action !== "session-end") {
       log("repository-check-start");
-      if (!isRepositoryEnabled(payload.cwd)) {
+      if (!isRepositoryEnabled(hookPayload.cwd)) {
         log("repository-disabled");
         return;
       }
       log("repository-check-completed");
     }
     log("request-start");
-    if (action === "session-prompt" && !payload.prompt) {
+    if (action === "session-prompt" && !hookPayload.prompt) {
       throw new Error("UserPromptSubmit payload must include prompt");
     }
-    const cwd = realpathSync(payload.cwd);
+    const cwd = realpathSync(hookPayload.cwd);
     const checkout =
       action === "session-prompt" ? undefined : normalizeStoredCheckout(discoverCheckout(cwd));
     let endpoint: string;
@@ -432,7 +500,7 @@ async function runInternal(
       method: "POST",
       body: JSON.stringify({
         cli,
-        payload: { ...payload, cwd: normalizeStoredPath(cwd) },
+        payload: { ...hookPayload, cwd: normalizeStoredPath(cwd) },
         ...(checkout === undefined ? {} : { checkout }),
         terminalId: process.env.TERM_SESSION_ID,
       }),
@@ -440,20 +508,47 @@ async function runInternal(
     if (action === "session-event" && cli === "claude") {
       appendClaudeEnvironment(
         process.env.CLAUDE_ENV_FILE,
-        { cli, externalSessionId: payload.session_id },
+        { cli, externalSessionId: hookPayload.session_id },
         response.runId ?? null,
       );
     }
     if (action === "session-event" && cli === "devin") {
       writeDevinSession(
-        { cli, externalSessionId: payload.session_id },
+        { cli, externalSessionId: hookPayload.session_id },
         response.runId ?? null,
         cwd,
         findDevinProcessPid(),
       );
     }
     if (action === "session-end" && cli === "devin") {
-      clearDevinSession(payload.session_id, findDevinProcessPid());
+      clearDevinSession(hookPayload.session_id, findDevinProcessPid());
+    }
+    if (action === "session-prompt") {
+      await Promise.all(
+        extractSlackThreadUrls(hookPayload.prompt!).map(async (url) => {
+          try {
+            await client().request("/api/conversation-links", {
+              method: "POST",
+              body: JSON.stringify({
+                url,
+                context: {
+                  session: { cli, externalSessionId: hookPayload.session_id },
+                  runId: process.env.WR_SESSION_RUN_ID,
+                  checkout: null,
+                  terminalId: process.env.TERM_SESSION_ID,
+                },
+              }),
+            });
+            log("conversation-link-completed", { url });
+          } catch (error) {
+            log("conversation-link-error", {
+              url,
+              error: error instanceof Error ? error.message : String(error),
+              code: (error as { code?: string }).code,
+            });
+          }
+        }),
+      );
     }
     log("request-completed");
     log("completed");
@@ -540,6 +635,10 @@ const commandParser = or(
       command(
         "session-end",
         object({ action: constant("internal-session-end"), cli: option("--cli", textValue) }),
+      ),
+      command(
+        "tool-event",
+        object({ action: constant("internal-tool-event"), cli: option("--cli", textValue) }),
       ),
     ),
     { hidden: true },
@@ -948,6 +1047,9 @@ try {
       break;
     case "internal-session-end":
       await runInternal("session-end", cli.cli);
+      break;
+    case "internal-tool-event":
+      await runInternal("tool-event", cli.cli);
       break;
     case "config-list": {
       const config = readConfig();

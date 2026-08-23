@@ -16,6 +16,14 @@ export const HookPayloadSchema = v.object({
   prompt: v.optional(NonEmptyStringSchema),
 });
 
+export const ToolHookPayloadSchema = v.object({
+  session_id: NonEmptyStringSchema,
+  cwd: NonEmptyStringSchema,
+  tool_name: v.optional(v.string()),
+  tool_input: v.optional(v.looseObject({ command: v.optional(v.string()) })),
+  tool_response: v.optional(v.unknown()),
+});
+
 export const ServerUrlSchema = v.pipe(
   v.string(),
   v.url(),
@@ -97,5 +105,50 @@ export const SlackThreadUrlSchema = v.pipe(
   ),
 );
 
+export function toolResponseText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null) return "";
+  const response = value as { output?: unknown; stdout?: unknown };
+  if (typeof response.output === "string") return response.output;
+  if (typeof response.stdout === "string") return response.stdout;
+  return "";
+}
+
+// ponytail: command文字列のマッチなので、取りこぼしは手動の wr pr add で補う。
+export function isPullRequestCreateCommand(command: string): boolean {
+  return /\bgh\s+pr\s+create\b/.test(command);
+}
+
+export function extractPullRequestUrls(
+  text: string,
+): Array<{ repo: string; number: number; url: string }> {
+  const pattern = /https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)\b/g;
+  const seen = new Set<string>();
+  const pullRequests: Array<{ repo: string; number: number; url: string }> = [];
+  for (const match of text.matchAll(pattern)) {
+    const url = match[0]!;
+    const repo = match[1]!;
+    const number = Number(match[2]);
+    if (seen.has(url)) continue;
+    seen.add(url);
+    pullRequests.push({ repo, number, url });
+  }
+  return pullRequests;
+}
+
+export function extractSlackThreadUrls(text: string): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const candidate of text.match(/https?:\/\/[^\s<>"']+/g) ?? []) {
+    const url = candidate.replace(/[),.;!?]+$/g, "");
+    const key = slackConversationKey(url);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+  return urls;
+}
+
 export type HookPayload = v.InferOutput<typeof HookPayloadSchema>;
+export type ToolHookPayload = v.InferOutput<typeof ToolHookPayloadSchema>;
 export type Config = v.InferOutput<typeof ConfigSchema>;
