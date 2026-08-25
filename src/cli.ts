@@ -44,6 +44,7 @@ import {
   extractPullRequestUrls,
   extractSlackThreadUrls,
   isPullRequestCreateCommand,
+  isPullRequestMergeCommand,
   ITermSessionListSchema,
   NonEmptyStringSchema,
   PositiveIntegerSchema,
@@ -433,13 +434,11 @@ async function runInternal(
     if (action === "tool-event") {
       const toolPayload = payload as ToolHookPayload;
       const toolCommand = toolPayload.tool_input?.command;
-      if (!toolCommand || !isPullRequestCreateCommand(toolCommand)) {
-        log("tool-event-ignored", { reason: "not-pull-request-create" });
-        return;
-      }
-      const urls = extractPullRequestUrls(toolResponseText(toolPayload.tool_response));
-      if (urls.length !== 1) {
-        log("tool-event-ignored", { reason: "pull-request-url-count", count: urls.length });
+      if (
+        !toolCommand ||
+        (!isPullRequestCreateCommand(toolCommand) && !isPullRequestMergeCommand(toolCommand))
+      ) {
+        log("tool-event-ignored", { reason: "not-pull-request-command" });
         return;
       }
       log("repository-check-start");
@@ -450,11 +449,24 @@ async function runInternal(
       log("repository-check-completed");
       log("request-start");
       const cwd = realpathSync(toolPayload.cwd);
-      const { repo, number } = urls[0]!;
+      const urls = extractPullRequestUrls(toolResponseText(toolPayload.tool_response));
+      const pullRequest = isPullRequestCreateCommand(toolCommand)
+        ? urls.length === 1
+          ? loadPullRequest(urls[0]!.repo, urls[0]!.number, cwd)
+          : null
+        : loadPullRequest(
+            toolCommand.match(/(?:^|\s)(?:-R|--repo)\s+([^\s;&|]+)/)?.[1] ?? repositoryName(cwd),
+            toolCommand.match(/\bgh\s+pr\s+merge(?:\s+((?!--)[^\s;&|]+))?/)?.[1],
+            cwd,
+          );
+      if (!pullRequest) {
+        log("tool-event-ignored", { reason: "pull-request-url-count", count: urls.length });
+        return;
+      }
       await client().request("/api/pull-requests", {
         method: "POST",
         body: JSON.stringify({
-          pullRequest: loadPullRequest(repo, number, cwd),
+          pullRequest,
           context: {
             session: { cli, externalSessionId: toolPayload.session_id },
             runId: process.env.WR_SESSION_RUN_ID,
@@ -579,7 +591,11 @@ function repositoryName(cwd = process.cwd()): string {
   ).nameWithOwner;
 }
 
-function loadPullRequest(repo: string, number: number, cwd = process.cwd()): PullRequestInput {
+function loadPullRequest(
+  repo: string,
+  number?: string | number,
+  cwd = process.cwd(),
+): PullRequestInput {
   const value = v.parse(
     PullRequestSchema,
     JSON.parse(
@@ -587,7 +603,7 @@ function loadPullRequest(repo: string, number: number, cwd = process.cwd()): Pul
         [
           "pr",
           "view",
-          String(number),
+          ...(number === undefined ? [] : [String(number)]),
           "--repo",
           repo,
           "--json",
@@ -598,7 +614,7 @@ function loadPullRequest(repo: string, number: number, cwd = process.cwd()): Pul
     ),
   );
   return {
-    repo,
+    repo: new URL(value.url).pathname.slice(1).replace(/\/pull\/\d+$/, ""),
     number: value.number,
     url: value.url,
     headBranch: value.headRefName,

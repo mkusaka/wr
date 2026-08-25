@@ -7,6 +7,7 @@ import {
   extractPullRequestUrls,
   extractSlackThreadUrls,
   isPullRequestCreateCommand,
+  isPullRequestMergeCommand,
   SlackThreadUrlSchema,
   toolResponseText,
 } from "../src/validation.ts";
@@ -86,6 +87,11 @@ describe("PostToolUse output", () => {
   test("recognizes gh pr create commands", () => {
     expect(isPullRequestCreateCommand("gh pr create --title change")).toBe(true);
     expect(isPullRequestCreateCommand("gh pr view 123")).toBe(false);
+  });
+
+  test("recognizes gh pr merge commands", () => {
+    expect(isPullRequestMergeCommand("gh pr merge 123 --squash")).toBe(true);
+    expect(isPullRequestMergeCommand("gh pr view 123")).toBe(false);
   });
 
   test("extracts and deduplicates pull request URLs", () => {

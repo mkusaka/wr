@@ -119,6 +119,10 @@ export function isPullRequestCreateCommand(command: string): boolean {
   return /\bgh\s+pr\s+create\b/.test(command);
 }
 
+export function isPullRequestMergeCommand(command: string): boolean {
+  return /\bgh\s+pr\s+merge\b/.test(command);
+}
+
 export function extractPullRequestUrls(
   text: string,
 ): Array<{ repo: string; number: number; url: string }> {
