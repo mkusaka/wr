@@ -1459,6 +1459,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const issue = c.req.query("task");
     const worktree = c.req.query("worktree");
     const session = c.req.query("session");
+    const run = c.req.query("run");
     const taskRows = issue
       ? await db
           .select({
@@ -1483,6 +1484,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           .where(
             and(
               deviceScope(schema.executions.deviceId, userId),
+              run ? eq(schema.executions.sessionRunId, run) : undefined,
               worktree ? eq(schema.checkouts.worktreePath, worktree) : undefined,
               session ? eq(schema.cliSessions.externalSessionId, session) : undefined,
             ),

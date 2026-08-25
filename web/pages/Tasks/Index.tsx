@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Autocomplete, useFilter } from "react-aria-components";
+import { router } from "@inertiajs/react";
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,6 +149,7 @@ const filterParsers = {
 
 type SelectedRecord =
   | { kind: "task"; key: string; issueId: string }
+  | { kind: "run"; key: string; id: string }
   | { kind: "pullRequest"; key: string; repo: string; number: number };
 
 type TaskRelationships = {
@@ -202,6 +204,7 @@ type PullRequestRelationships = {
 
 type LoadedRelationships =
   | { kind: "task"; data: TaskRelationships }
+  | { kind: "run"; data: TaskRelationships[] }
   | { kind: "pullRequest"; data: PullRequestRelationships };
 
 export function filterLedger(ledger: Ledger, filters: Filters) {
@@ -224,12 +227,16 @@ export function filterLedger(ledger: Ledger, filters: Filters) {
     const current: T[] = [];
     let nonCurrent = 0;
     for (const record of records) {
-      if (!matchesScope(record) || !matchesQuery(queryValues(record), filters.query)) continue;
+      if (!matchesScope(record)) continue;
+      if (filters.state === "current" && !isCurrent(record)) {
+        nonCurrent++;
+        continue;
+      }
+      if (!matchesQuery(queryValues(record), filters.query)) continue;
       if (filters.state === "all") {
         current.push(record);
       } else if (filters.state === "current") {
-        if (isCurrent(record)) current.push(record);
-        else nonCurrent++;
+        current.push(record);
       } else if (stateValue(record) === filters.state) {
         current.push(record);
       }
@@ -417,6 +424,7 @@ export default function TasksIndex({
   const [relationships, setRelationships] = useState<LoadedRelationships | null>(null);
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [relationshipsLoading, setRelationshipsLoading] = useState(false);
+  const initialQuery = useRef(query);
   const filtered = useMemo(
     () =>
       filterLedger(
@@ -447,6 +455,12 @@ export default function TasksIndex({
     filtered.conversationLinks.length;
   const nonCurrentTotal = filtered.nonCurrentTotal;
   const globalSearch = queryState.global ? "&global=true" : "";
+
+  useEffect(() => {
+    if (query === initialQuery.current) return;
+    router.reload();
+  }, [query]);
+
   const searchDevices = (value: string) => {
     const request = ++deviceRequest.current;
     void fetch(`/api/select-options/devices?q=${encodeURIComponent(value)}${globalSearch}`)
@@ -506,13 +520,17 @@ export default function TasksIndex({
     const url =
       selected.kind === "task"
         ? `/api/show?task=${encodeURIComponent(selected.issueId)}`
-        : `/api/pull-request-relationships?repo=${encodeURIComponent(selected.repo)}&number=${selected.number}`;
+        : selected.kind === "run"
+          ? `/api/show?run=${encodeURIComponent(selected.id)}`
+          : `/api/pull-request-relationships?repo=${encodeURIComponent(selected.repo)}&number=${selected.number}`;
     void fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Could not load relationships (${response.status})`);
-        if (selected.kind === "task") {
+        if (selected.kind === "task" || selected.kind === "run") {
           const data = (await response.json()) as TaskRelationships[];
-          setRelationships({ kind: "task", data: data[0]! });
+          setRelationships(
+            selected.kind === "task" ? { kind: "task", data: data[0]! } : { kind: "run", data },
+          );
         } else {
           const data = (await response.json()) as PullRequestRelationships;
           setRelationships({ kind: "pullRequest", data });
@@ -767,26 +785,54 @@ export default function TasksIndex({
             </h2>
             <div className="grid gap-3">
               {filtered.runs.map((run) => (
-                <Card key={run.id} size="sm">
-                  <CardHeader>
-                    <CardTitle className="break-all font-mono text-sm">
-                      {run.cli}:{run.externalSessionId}
-                    </CardTitle>
-                    <CardDescription className="break-all font-mono text-xs">
-                      {run.startedCwd || run.id}
-                      {run.source ? ` · ${run.source}` : ""}
-                    </CardDescription>
-                    <CardAction>
-                      <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
-                    </CardAction>
-                  </CardHeader>
+                <Card
+                  key={run.id}
+                  size="sm"
+                  className={
+                    selected?.kind === "run" && selected.key === run.id
+                      ? "border-primary/40 ring-2 ring-primary/10"
+                      : undefined
+                  }
+                >
+                  <button
+                    type="button"
+                    className="w-full text-left"
+                    aria-expanded={selected?.kind === "run" && selected.key === run.id}
+                    onClick={() =>
+                      setSelected(
+                        selected?.kind === "run" && selected.key === run.id
+                          ? null
+                          : { kind: "run", key: run.id, id: run.id },
+                      )
+                    }
+                  >
+                    <CardHeader>
+                      <CardTitle className="break-all font-mono text-sm">
+                        {run.cli}:{run.externalSessionId}
+                      </CardTitle>
+                      <CardDescription className="break-all font-mono text-xs">
+                        {run.startedCwd || run.id}
+                        {run.source ? ` · ${run.source}` : ""}
+                      </CardDescription>
+                      <CardAction className="flex items-center gap-2">
+                        <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+                        {selected?.kind === "run" && selected.key === run.id ? (
+                          <ChevronDownIcon className="size-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRightIcon className="size-4 text-muted-foreground" />
+                        )}
+                      </CardAction>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 text-xs text-muted-foreground">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <code className="break-all">{run.id}</code>
+                        <time dateTime={run.updatedAt}>
+                          {new Date(`${run.updatedAt}Z`).toLocaleString("en-US")}
+                        </time>
+                      </div>
+                    </CardContent>
+                  </button>
                   <CardContent className="grid gap-3 text-xs text-muted-foreground">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <code className="break-all">{run.id}</code>
-                      <time dateTime={run.updatedAt}>
-                        {new Date(`${run.updatedAt}Z`).toLocaleString("en-US")}
-                      </time>
-                    </div>
                     <div className="flex flex-wrap gap-2">
                       <CopyCommand
                         command={
@@ -820,6 +866,34 @@ export default function TasksIndex({
                       </div>
                     ) : null}
                   </CardContent>
+                  {selected?.kind === "run" && selected.key === run.id ? (
+                    <CardContent className="border-t pt-4" aria-live="polite">
+                      {relationshipsLoading ? (
+                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <LoaderCircleIcon className="size-4 animate-spin" />
+                          Loading related tasks
+                        </p>
+                      ) : relationshipError ? (
+                        <p className="text-sm text-destructive">{relationshipError}</p>
+                      ) : relationships?.kind === "run" && relationships.data.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          <span className="text-xs font-medium text-muted-foreground uppercase">
+                            Tasks
+                          </span>
+                          {relationships.data.map((task) => (
+                            <span
+                              key={task.linearIssueId}
+                              className="rounded-md border px-2.5 py-1.5 text-xs"
+                            >
+                              {task.linearIssueId} · {task.status}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No related tasks.</p>
+                      )}
+                    </CardContent>
+                  ) : null}
                 </Card>
               ))}
             </div>

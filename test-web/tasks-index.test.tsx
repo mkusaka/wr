@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { router } from "@inertiajs/react";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import TasksIndex, {
   type ConversationLink,
   type Device,
@@ -103,6 +104,10 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+beforeEach(() => {
+  vi.spyOn(router, "reload").mockImplementation(() => undefined);
+});
+
 describe("TasksIndex", () => {
   test("switches between light and dark mode", () => {
     renderPage();
@@ -137,6 +142,49 @@ describe("TasksIndex", () => {
 
     expect(screen.getByRole("heading", { name: /Tasks\s*1/ })).toBeTruthy();
     expect(screen.getByText("+ 1 non-current")).toBeTruthy();
+  });
+
+  test("shows non-current count when searching", async () => {
+    const doneTask: Task = { ...pageProps.tasks[0]!, issueId: "MOQ-101", status: "done" };
+    renderPage({ ...pageProps, tasks: [...pageProps.tasks, doneTask] });
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
+      target: { value: "Patient" },
+    });
+
+    expect(screen.getByText("+ 1 non-current")).toBeTruthy();
+    await waitFor(() => expect(router.reload).toHaveBeenCalled());
+  });
+
+  test("loads related tasks from a run", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                linearIssueId: "MOQ-100",
+                title: "Patient search",
+                status: "active",
+                executions: [],
+                pullRequests: [],
+                links: [],
+              },
+            ]),
+          ),
+        ),
+      ),
+    );
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /codex:session-a/ }));
+
+    expect(await screen.findByText("MOQ-100 · active")).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/show?run=run-a",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
+    );
   });
 
   test("searches tasks, pull requests, and conversations by device name", async () => {

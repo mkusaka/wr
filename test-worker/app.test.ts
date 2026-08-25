@@ -918,11 +918,22 @@ describe("wr Worker API", () => {
     });
     const result = await (
       await request("/api/show?task=MOQ-7", "show-device")
-    ).json<Array<{ executions: unknown[]; pullRequests: unknown[]; links: unknown[] }>>();
+    ).json<
+      Array<{
+        executions: Array<{ sessionRunId: string | null }>;
+        pullRequests: unknown[];
+        links: unknown[];
+      }>
+    >();
     expect(result).toHaveLength(1);
     expect(result[0]?.executions).toHaveLength(1);
     expect(result[0]?.pullRequests).toHaveLength(1);
     expect(result[0]?.links).toHaveLength(1);
+
+    const fromRun = await (
+      await request(`/api/show?run=${result[0]?.executions[0]?.sessionRunId}`, "show-device")
+    ).json<Array<{ linearIssueId: string }>>();
+    expect(fromRun).toMatchObject([{ linearIssueId: "MOQ-7" }]);
 
     const relationships = await (
       await request("/api/pull-request-relationships?repo=example%2Frepo&number=7", "show-device")
