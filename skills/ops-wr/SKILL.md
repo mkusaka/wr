@@ -41,6 +41,7 @@ wr run list
 wr run sync
 wr run list --pr 123
 wr session list --task MAL-123
+wr session tree --session claude:<session-id>
 wr checkout list --session <session-id>
 wr execution list --branch feature/foo
 wr link list --pr 123
@@ -68,6 +69,8 @@ Resource list commands use the current repository inside Git and the global ledg
 Use `wr task list`, `wr session list`, `wr run list`, `wr checkout list`, `wr execution list`, `wr link list`, `wr pr list`, `wr branch list`, `wr terminal list`, and `wr repo list` to choose the output resource. Filter any resource by a stored relationship with `--task`, `--session`, `--run`, `--checkout`, `--execution`, `--link`, `--terminal`, `--repo`, `--worktree`, `--branch`, or `--pr`. Pass the raw Codex thread ID, Claude session ID, or Devin session ID to `--session`, without a CLI prefix when the corresponding CLI environment is available. Otherwise pass the explicit `devin:<session-id>` form for Devin. `--task` accepts the Linear issue identifier. Use `--limit NUMBER` to bound ordered results, `--json FIELD,...` for structured output, and `--jq EXPRESSION` only when the installed `jq` command is available. Pass bare `--json` to discover fields.
 
 `wr session list` refers to stable CLI sessions. `wr run list` refers to individual SessionRuns and `wr run focus` can focus a related iTerm2 pane. The human-readable session field uses `claude:<session-id>`, `codex:<thread-id>`, or `devin:<session-id>`.
+
+Hooks collect every supported session ID inherited by a child process. To persist a direct parent only when it is known, a launcher skill may pass `WR_PARENT_CLI_SESSION=<cli>:<id>` to that one child launch. Do not infer a parent from ambient IDs, and leave the variable unset when it is ambiguous. `wr session tree --session claude:<session-id>` shows the ordered ancestor path and the target session's descendants; `--json` returns the same structure as `ancestors` and nested `children`.
 
 Use `wr run sync` on each Device to end active runs whose recorded iTerm2 sessions no longer exist. It leaves runs without a terminal ID unchanged.
 

@@ -394,6 +394,73 @@ describe("wr Worker API", () => {
     expect(session).toEqual({ cli: "pi", initialPrompt: "Track this Pi session" });
   });
 
+  test("registers inherited sessions and retains the first explicit parent", async () => {
+    const parent = { cli: "codex", externalSessionId: "codex-parent" } as const;
+    const sibling = { cli: "pi", externalSessionId: "pi-context" } as const;
+    const child = { cli: "claude", externalSessionId: "claude-child" } as const;
+    const grandchild = { cli: "devin", externalSessionId: "devin-grandchild" } as const;
+    await request("/api/session-events", "lineage-device", {
+      cli: child.cli,
+      payload: { session_id: child.externalSessionId, cwd: "/src/example", source: "startup" },
+      relatedSessions: [parent, sibling],
+      parentSession: parent,
+      checkout,
+    });
+    await request("/api/session-events", "lineage-device", {
+      cli: grandchild.cli,
+      payload: {
+        session_id: grandchild.externalSessionId,
+        cwd: "/src/example",
+        source: "startup",
+      },
+      relatedSessions: [parent, child],
+      parentSession: child,
+      checkout,
+    });
+    await request("/api/session-events", "lineage-device", {
+      cli: child.cli,
+      payload: { session_id: child.externalSessionId, cwd: "/src/example", source: "compact" },
+      parentSession: sibling,
+      checkout,
+    });
+
+    const db = drizzle((env as unknown as Env).DB, { schema });
+    const sessions = await db
+      .select({
+        id: schema.cliSessions.id,
+        cli: schema.cliSessions.cli,
+        externalSessionId: schema.cliSessions.externalSessionId,
+        parentCliSessionId: schema.cliSessions.parentCliSessionId,
+      })
+      .from(schema.cliSessions);
+    const parentRow = sessions.find(
+      (session) =>
+        session.cli === parent.cli && session.externalSessionId === parent.externalSessionId,
+    )!;
+    const childRow = sessions.find(
+      (session) =>
+        session.cli === child.cli && session.externalSessionId === child.externalSessionId,
+    )!;
+    expect(sessions).toHaveLength(4);
+    expect(childRow.parentCliSessionId).toBe(parentRow.id);
+
+    const lineage = await (
+      await request(`/api/session-lineage?id=${childRow.id}`, "lineage-device")
+    ).json<{
+      ancestors: Array<{ cli: string; externalSessionId: string }>;
+      session: { children: Array<{ cli: string; externalSessionId: string }> };
+    }>();
+    expect(lineage.ancestors).toEqual([
+      expect.objectContaining({ cli: parent.cli, externalSessionId: parent.externalSessionId }),
+    ]);
+    expect(lineage.session.children).toEqual([
+      expect.objectContaining({
+        cli: grandchild.cli,
+        externalSessionId: grandchild.externalSessionId,
+      }),
+    ]);
+  });
+
   test("sorts sessions by updated time descending", async () => {
     const db = drizzle((env as unknown as Env).DB, { schema });
     await request("/api/session-events", "sort-device", {

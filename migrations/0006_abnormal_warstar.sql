@@ -1,0 +1,1 @@
+ALTER TABLE `cli_sessions` ADD `parent_cli_session_id` text REFERENCES cli_sessions(id);

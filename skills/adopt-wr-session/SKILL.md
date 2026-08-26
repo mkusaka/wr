@@ -45,6 +45,8 @@ wr show --session "${CLAUDE_CODE_SESSION_ID}"
 
 If `CLAUDE_CODE_SESSION_ID` is empty, or automatic discovery conflicts with the explicit ID, stop and report the condition. Do not inspect transcript storage or force an identity.
 
+Session lineage is hook-driven. Do not add a parent from remembered context during adoption. A direct parent is recorded only when the child launch supplied `WR_PARENT_CLI_SESSION=<cli>:<id>`; inherited IDs register their sessions but do not establish parentage. Inspect available lineage with `wr session tree --session claude:<session-id>`.
+
 ## Register every remembered relationship
 
 For every remembered task, verify that its paired Jira issue is known. If the Jira issue is missing, find or create the corresponding Jira issue before registering the `wr` relationship. Record the Jira key in the adoption report; `wr` relationships continue to use the Linear issue identifier.

@@ -38,6 +38,7 @@ wr task start ISSUE --title "Task title" --worktree .
 wr task done ISSUE
 
 wr session list --task ISSUE
+wr session tree --session claude:<session-id>
 wr checkout list --session SESSION_ID
 wr execution list --branch BRANCH
 wr run list
@@ -47,6 +48,14 @@ wr terminal list --task ISSUE
 ```
 
 Use the raw CLI session ID with `--session` when the current session cannot be discovered. For Devin, use `devin:<session-id>` when the CLI environment is unavailable.
+
+## Preserve session lineage
+
+Hooks register every distinct Pi, Codex, Claude, and Devin session ID that reaches a child process. They do not infer a direct parent from those inherited IDs.
+
+When launching one agent from another and the current session identity is known, pass it to that one child launch as `WR_PARENT_CLI_SESSION=<cli>:<id>`. For example, a Claude shell launching a child agent may use `WR_PARENT_CLI_SESSION="claude:${CLAUDE_CODE_SESSION_ID}"`. Leave the variable unset when the parent is unknown; never manufacture a value from an ambiguous inherited environment.
+
+`wr session tree --session claude:<session-id>` renders the root-to-target ancestor path and the target's descendants. Add `--json` for `{ ancestors, session: { children } }`.
 
 Register GitHub and workpad relationships with their dedicated resources:
 

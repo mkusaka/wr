@@ -12,11 +12,15 @@ import {
   PullRequestInputSchema,
   type CheckoutInput,
   type ContextInput,
+  type SessionIdentity,
+  type SessionLineage,
+  type SessionLineageNode,
 } from "../src/api.ts";
 import {
   CliSchema,
   HookPayloadSchema,
   NonEmptyStringSchema,
+  SessionIdentitySchema,
   slackConversationKey,
   TaskStatusSchema,
 } from "../src/validation.ts";
@@ -167,7 +171,24 @@ async function ensureTask(db: Database, deviceId: string, issue: string) {
 
 async function ensureSession(db: Database, deviceId: string, session: ContextInput["session"]) {
   if (!session) throw new HTTPException(400, { message: "Could not resolve a session" });
-  const existing = await db
+  await db
+    .insert(schema.cliSessions)
+    .values({
+      id: id(),
+      deviceId,
+      cli: session.cli,
+      externalSessionId: session.externalSessionId,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.cliSessions.deviceId,
+        schema.cliSessions.cli,
+        schema.cliSessions.externalSessionId,
+      ],
+      set: { updatedAt: now },
+    });
+  const stored = await db
     .select({ id: schema.cliSessions.id })
     .from(schema.cliSessions)
     .where(
@@ -178,16 +199,7 @@ async function ensureSession(db: Database, deviceId: string, session: ContextInp
       ),
     )
     .get();
-  if (existing) return existing.id;
-  const sessionId = id();
-  await db.insert(schema.cliSessions).values({
-    id: sessionId,
-    deviceId,
-    cli: session.cli,
-    externalSessionId: session.externalSessionId,
-    updatedAt: now,
-  });
-  return sessionId;
+  return stored!.id;
 }
 
 async function ensureCheckout(db: Database, deviceId: string, checkout: CheckoutInput | null) {
@@ -213,8 +225,48 @@ async function ensureCheckout(db: Database, deviceId: string, checkout: Checkout
   return stored!.id;
 }
 
-async function resolveContext(db: Database, deviceId: string, context: ContextInput) {
+async function ensureSessionContext(
+  db: Database,
+  deviceId: string,
+  context: Pick<ContextInput, "session" | "relatedSessions" | "parentSession">,
+) {
   const sessionId = await ensureSession(db, deviceId, context.session);
+  const known = new Set<string>();
+  const distinctRelatedSessions = [
+    ...(context.relatedSessions ?? []),
+    context.parentSession,
+  ].filter((candidate): candidate is SessionIdentity => {
+    if (
+      candidate === undefined ||
+      (candidate.cli === context.session?.cli &&
+        candidate.externalSessionId === context.session?.externalSessionId)
+    ) {
+      return false;
+    }
+    const key = `${candidate.cli}:${candidate.externalSessionId}`;
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  });
+  await Promise.all(distinctRelatedSessions.map((related) => ensureSession(db, deviceId, related)));
+  if (
+    context.parentSession &&
+    (context.parentSession.cli !== context.session?.cli ||
+      context.parentSession.externalSessionId !== context.session?.externalSessionId)
+  ) {
+    const parentSessionId = await ensureSession(db, deviceId, context.parentSession);
+    await db
+      .update(schema.cliSessions)
+      .set({ parentCliSessionId: parentSessionId })
+      .where(
+        and(eq(schema.cliSessions.id, sessionId), isNull(schema.cliSessions.parentCliSessionId)),
+      );
+  }
+  return sessionId;
+}
+
+async function resolveContext(db: Database, deviceId: string, context: ContextInput) {
+  const sessionId = await ensureSessionContext(db, deviceId, context);
   let run = context.runId
     ? await db
         .select({ id: schema.sessionRuns.id })
@@ -275,6 +327,111 @@ async function resolveContext(db: Database, deviceId: string, context: ContextIn
 
 async function requestBody(c: { req: { json: () => Promise<unknown> } }) {
   return v.parse(jsonObject, await c.req.json());
+}
+
+function hookSessionContext(
+  value: Record<string, unknown>,
+  cli: SessionIdentity["cli"],
+  payload: { session_id: string },
+): Pick<ContextInput, "session" | "relatedSessions" | "parentSession"> {
+  return {
+    session: { cli, externalSessionId: payload.session_id },
+    relatedSessions:
+      v.parse(v.optional(v.array(SessionIdentitySchema)), value.relatedSessions) ?? [],
+    parentSession: v.parse(v.optional(SessionIdentitySchema), value.parentSession),
+  };
+}
+
+type StoredLineageSession = Omit<SessionLineageNode, "children"> & {
+  deviceId: string;
+  parentCliSessionId: string | null;
+};
+
+async function loadLineageSession(
+  db: Database,
+  userId: string,
+  where: SQL | undefined,
+): Promise<StoredLineageSession | undefined> {
+  return db
+    .select({
+      id: schema.cliSessions.id,
+      deviceId: schema.cliSessions.deviceId,
+      cli: schema.cliSessions.cli,
+      externalSessionId: schema.cliSessions.externalSessionId,
+      parentCliSessionId: schema.cliSessions.parentCliSessionId,
+      status: sql<"active" | "ended">`CASE WHEN EXISTS (
+        SELECT 1 FROM session_runs sr
+        WHERE sr.cli_session_id = ${schema.cliSessions.id} AND sr.ended_at IS NULL
+      ) THEN 'active' ELSE 'ended' END`,
+    })
+    .from(schema.cliSessions)
+    .where(and(deviceScope(schema.cliSessions.deviceId, userId), where))
+    .orderBy(desc(sql`coalesce(${schema.cliSessions.updatedAt}, ${schema.cliSessions.createdAt})`))
+    .get();
+}
+
+async function loadLineageChildren(
+  db: Database,
+  userId: string,
+  parentCliSessionId: string,
+): Promise<StoredLineageSession[]> {
+  return db
+    .select({
+      id: schema.cliSessions.id,
+      deviceId: schema.cliSessions.deviceId,
+      cli: schema.cliSessions.cli,
+      externalSessionId: schema.cliSessions.externalSessionId,
+      parentCliSessionId: schema.cliSessions.parentCliSessionId,
+      status: sql<"active" | "ended">`CASE WHEN EXISTS (
+        SELECT 1 FROM session_runs sr
+        WHERE sr.cli_session_id = ${schema.cliSessions.id} AND sr.ended_at IS NULL
+      ) THEN 'active' ELSE 'ended' END`,
+    })
+    .from(schema.cliSessions)
+    .where(
+      and(
+        deviceScope(schema.cliSessions.deviceId, userId),
+        eq(schema.cliSessions.parentCliSessionId, parentCliSessionId),
+      ),
+    )
+    .orderBy(desc(sql`coalesce(${schema.cliSessions.updatedAt}, ${schema.cliSessions.createdAt})`));
+}
+
+async function loadLineageTree(
+  db: Database,
+  userId: string,
+  session: StoredLineageSession,
+  depth = 0,
+): Promise<SessionLineageNode> {
+  // ponytail: lineage rendering is capped at 16 levels; add cycle detection if untrusted writers arrive.
+  const children =
+    depth === 16
+      ? []
+      : await Promise.all(
+          (await loadLineageChildren(db, userId, session.id)).map((child) =>
+            loadLineageTree(db, userId, child, depth + 1),
+          ),
+        );
+  const { deviceId: _, parentCliSessionId: __, ...node } = session;
+  return { ...node, children };
+}
+
+async function loadLineageAncestors(
+  db: Database,
+  userId: string,
+  parentCliSessionId: string | null,
+  depth = 0,
+): Promise<SessionLineage["ancestors"]> {
+  if (!parentCliSessionId || depth === 16) return [];
+  const parent = await loadLineageSession(
+    db,
+    userId,
+    eq(schema.cliSessions.id, parentCliSessionId),
+  );
+  if (!parent) return [];
+  const ancestors = await loadLineageAncestors(db, userId, parent.parentCliSessionId, depth + 1);
+  const { deviceId: _, parentCliSessionId: __, ...ancestor } = parent;
+  return [...ancestors, ancestor];
 }
 
 function requireDevice(deviceId: string | undefined): string {
@@ -632,28 +789,12 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const payload = v.parse(HookPayloadSchema, value.payload);
     const terminalId = v.parse(v.optional(v.string()), value.terminalId);
     const checkout = v.parse(v.nullable(CheckoutInputSchema), value.checkout ?? null);
+    const sessionContext = hookSessionContext(value, cli, payload);
+    const sessionId = await ensureSessionContext(db, deviceId, sessionContext);
     await db
-      .insert(schema.cliSessions)
-      .values({ id: id(), deviceId, cli, externalSessionId: payload.session_id, updatedAt: now })
-      .onConflictDoUpdate({
-        target: [
-          schema.cliSessions.deviceId,
-          schema.cliSessions.cli,
-          schema.cliSessions.externalSessionId,
-        ],
-        set: { updatedAt: now },
-      });
-    const session = (await db
-      .select({ id: schema.cliSessions.id })
-      .from(schema.cliSessions)
-      .where(
-        and(
-          eq(schema.cliSessions.deviceId, deviceId),
-          eq(schema.cliSessions.cli, cli),
-          eq(schema.cliSessions.externalSessionId, payload.session_id),
-        ),
-      )
-      .get())!;
+      .update(schema.cliSessions)
+      .set({ updatedAt: now })
+      .where(eq(schema.cliSessions.id, sessionId));
     if (payload.source === "compact") {
       const run = await db
         .select({ id: schema.sessionRuns.id })
@@ -661,13 +802,13 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         .where(
           and(
             eq(schema.sessionRuns.deviceId, deviceId),
-            eq(schema.sessionRuns.cliSessionId, session.id),
+            eq(schema.sessionRuns.cliSessionId, sessionId),
             isNull(schema.sessionRuns.endedAt),
           ),
         )
         .orderBy(desc(schema.sessionRuns.lastSeenAt))
         .get();
-      if (!run) return c.json({ sessionId: session.id, runId: null });
+      if (!run) return c.json({ sessionId, runId: null });
       await db
         .update(schema.sessionRuns)
         .set({ lastSeenAt: now })
@@ -686,7 +827,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             set: { lastSeenAt: now },
           });
       }
-      return c.json({ sessionId: session.id, runId: run.id });
+      return c.json({ sessionId, runId: run.id });
     }
     if (terminalId) {
       await db
@@ -704,7 +845,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     await db.insert(schema.sessionRuns).values({
       id: runId,
       deviceId,
-      cliSessionId: session.id,
+      cliSessionId: sessionId,
       terminalId,
       startedCwd: payload.cwd,
       source: payload.source ?? "unknown",
@@ -715,7 +856,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         .insert(schema.sessionRunCheckouts)
         .values({ deviceId, sessionRunId: runId, checkoutId });
     }
-    return c.json({ sessionId: session.id, runId }, 201);
+    return c.json({ sessionId, runId }, 201);
   });
 
   app.post("/api/session-prompts", async (c) => {
@@ -725,27 +866,15 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const cli = v.parse(CliSchema, value.cli);
     const payload = v.parse(HookPayloadSchema, value.payload);
     if (!payload.prompt) return c.json({ message: "prompt is required" }, 400);
+    const sessionContext = hookSessionContext(value, cli, payload);
+    const sessionId = await ensureSessionContext(db, deviceId, sessionContext);
     await db
-      .insert(schema.cliSessions)
-      .values({
-        id: id(),
-        deviceId,
-        cli,
-        externalSessionId: payload.session_id,
-        initialPrompt: payload.prompt,
+      .update(schema.cliSessions)
+      .set({
+        initialPrompt: sql`coalesce(${schema.cliSessions.initialPrompt}, ${payload.prompt})`,
         updatedAt: now,
       })
-      .onConflictDoUpdate({
-        target: [
-          schema.cliSessions.deviceId,
-          schema.cliSessions.cli,
-          schema.cliSessions.externalSessionId,
-        ],
-        set: {
-          initialPrompt: sql`coalesce(${schema.cliSessions.initialPrompt}, ${payload.prompt})`,
-          updatedAt: now,
-        },
-      });
+      .where(eq(schema.cliSessions.id, sessionId));
     return c.json({ saved: true });
   });
 
@@ -755,15 +884,15 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const value = await requestBody(c);
     const cli = v.parse(CliSchema, value.cli);
     const payload = v.parse(HookPayloadSchema, value.payload);
+    const sessionContext = hookSessionContext(value, cli, payload);
+    const sessionId = await ensureSessionContext(db, deviceId, sessionContext);
     const run = await db
       .select({ id: schema.sessionRuns.id })
       .from(schema.sessionRuns)
-      .innerJoin(schema.cliSessions, eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId))
       .where(
         and(
           eq(schema.sessionRuns.deviceId, deviceId),
-          eq(schema.cliSessions.cli, cli),
-          eq(schema.cliSessions.externalSessionId, payload.session_id),
+          eq(schema.sessionRuns.cliSessionId, sessionId),
           isNull(schema.sessionRuns.endedAt),
         ),
       )
@@ -776,6 +905,44 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         .where(eq(schema.sessionRuns.id, run.id));
     }
     return c.json({ runId: run?.id ?? null });
+  });
+
+  app.get("/api/session-lineage", async (c) => {
+    const db = drizzle(c.env.DB, { schema });
+    const userId = c.get("userId");
+    const idQuery = c.req.query("id");
+    const sessionQuery = c.req.query("session");
+    let session: StoredLineageSession | undefined;
+    if (idQuery) {
+      session = await loadLineageSession(
+        db,
+        userId,
+        eq(schema.cliSessions.id, v.parse(NonEmptyStringSchema, idQuery)),
+      );
+    } else if (sessionQuery) {
+      const separator = sessionQuery.indexOf(":");
+      const identity = v.parse(SessionIdentitySchema, {
+        cli: sessionQuery.slice(0, separator),
+        externalSessionId: sessionQuery.slice(separator + 1),
+      });
+      session = await loadLineageSession(
+        db,
+        userId,
+        and(
+          eq(schema.cliSessions.cli, identity.cli),
+          eq(schema.cliSessions.externalSessionId, identity.externalSessionId),
+        ),
+      );
+    } else {
+      throw new HTTPException(400, { message: "A session ID is required" });
+    }
+    if (!session) throw new HTTPException(404, { message: "Session not found" });
+
+    const ancestors = await loadLineageAncestors(db, userId, session.parentCliSessionId);
+    return c.json<SessionLineage>({
+      ancestors,
+      session: await loadLineageTree(db, userId, session),
+    });
   });
 
   app.post("/api/runs/sync", async (c) => {

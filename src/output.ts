@@ -1,4 +1,4 @@
-import type { ShowTask } from "./api.ts";
+import type { SessionLineage, ShowTask } from "./api.ts";
 import { DEFAULT_FIELDS, RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
 
 function terminalText(value: unknown): string {
@@ -81,6 +81,30 @@ export function renderResource(
   if (!result) throw new Error("jq is required for --jq");
   if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || "jq failed");
   return result.stdout.toString().trimEnd();
+}
+
+function appendSessionChildren(
+  lines: string[],
+  children: SessionLineage["session"]["children"],
+  prefix: string,
+): void {
+  for (const [index, child] of children.entries()) {
+    const last = index === children.length - 1;
+    lines.push(
+      `${prefix}${last ? "└─" : "├─"} ${terminalText(child.cli)}:${terminalText(child.externalSessionId)} [${terminalText(child.status)}]`,
+    );
+    appendSessionChildren(lines, child.children, `${prefix}${last ? "   " : "│  "}`);
+  }
+}
+
+export function renderSessionLineage(lineage: SessionLineage): string {
+  const path = [...lineage.ancestors, lineage.session];
+  const lines = path.map(
+    (session, index) =>
+      `${index === 0 ? "" : `${"   ".repeat(index - 1)}└─ `}${terminalText(session.cli)}:${terminalText(session.externalSessionId)} [${terminalText(session.status)}]`,
+  );
+  appendSessionChildren(lines, lineage.session.children, "   ".repeat(lineage.ancestors.length));
+  return lines.join("\n");
 }
 
 export function renderShow(tasks: ShowTask[]): string {

@@ -168,19 +168,39 @@ describe("TasksIndex", () => {
   test("loads related tasks from a run", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() =>
+      vi.fn((input: string) =>
         Promise.resolve(
           new Response(
-            JSON.stringify([
-              {
-                linearIssueId: "MOQ-100",
-                title: "Patient search",
-                status: "active",
-                executions: [],
-                pullRequests: [],
-                links: [],
-              },
-            ]),
+            JSON.stringify(
+              input.startsWith("/api/session-lineage")
+                ? {
+                    ancestors: [
+                      {
+                        id: "session-parent",
+                        cli: "claude",
+                        externalSessionId: "parent-session",
+                        status: "ended",
+                      },
+                    ],
+                    session: {
+                      id: "session-a",
+                      cli: "codex",
+                      externalSessionId: "session-a",
+                      status: "active",
+                      children: [],
+                    },
+                  }
+                : [
+                    {
+                      linearIssueId: "MOQ-100",
+                      title: "Patient search",
+                      status: "active",
+                      executions: [],
+                      pullRequests: [],
+                      links: [],
+                    },
+                  ],
+            ),
           ),
         ),
       ),
@@ -192,6 +212,11 @@ describe("TasksIndex", () => {
     expect(await screen.findByText("MOQ-100 · active")).toBeTruthy();
     expect(fetch).toHaveBeenCalledWith(
       "/api/show?run=run-a",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
+    );
+    expect(await screen.findByText("Lineage")).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/session-lineage?id=session-a",
       expect.objectContaining({ headers: { Accept: "application/json" } }),
     );
   });

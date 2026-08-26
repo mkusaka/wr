@@ -67,6 +67,9 @@ export const cliSessions = sqliteTable(
       .references(() => devices.id),
     cli: text({ enum: ["codex", "claude", "devin", "pi"] }).notNull(),
     externalSessionId: text("external_session_id").notNull(),
+    parentCliSessionId: text("parent_cli_session_id").references(
+      (): AnySQLiteColumn => cliSessions.id,
+    ),
     initialPrompt: text("initial_prompt"),
     ...timestamps,
     updatedAt: text("updated_at"),

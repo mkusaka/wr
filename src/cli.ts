@@ -11,7 +11,7 @@ import { valibot } from "@optique/valibot";
 import { render } from "ink";
 import { createElement } from "react";
 import * as v from "valibot";
-import type { FocusTarget, PullRequestInput, ShowTask } from "./api.ts";
+import type { FocusTarget, PullRequestInput, SessionLineage, ShowTask } from "./api.ts";
 import { ApiClient } from "./client.ts";
 import {
   disableRepository,
@@ -27,6 +27,8 @@ import {
   currentContext,
   findCurrentSession,
   findDevinProcessPid,
+  findParentSession,
+  findSessionIdentities,
   normalizeStoredCheckout,
   normalizeStoredPath,
   parseHookPayload,
@@ -35,7 +37,7 @@ import {
   type Cli,
 } from "./context.ts";
 import { discoverCheckout } from "./git.ts";
-import { renderResource, renderShow } from "./output.ts";
+import { renderResource, renderSessionLineage, renderShow } from "./output.ts";
 import { isCurrentResource, RESOURCE_FIELDS, type ResourceName } from "./resources.ts";
 import { WrUi } from "./ui.tsx";
 import {
@@ -443,6 +445,19 @@ async function runInternal(
       cli === "pi" && process.env.PI_SESSION_ID
         ? { ...parsedPayload, session_id: process.env.PI_SESSION_ID }
         : parsedPayload;
+    const hookSession = { cli, externalSessionId: payload.session_id };
+    const parentCandidate = findParentSession();
+    const parentSession =
+      parentCandidate &&
+      (parentCandidate.cli !== hookSession.cli ||
+        parentCandidate.externalSessionId !== hookSession.externalSessionId)
+        ? parentCandidate
+        : undefined;
+    const relatedSessions = findSessionIdentities(process.env, payload.cwd, parentSession).filter(
+      (candidate) =>
+        candidate.cli !== hookSession.cli ||
+        candidate.externalSessionId !== hookSession.externalSessionId,
+    );
     log("parse-completed", { source: "source" in payload ? payload.source : undefined });
 
     // PostToolUse fires for every tool call, so reject on the payload alone before
@@ -484,7 +499,9 @@ async function runInternal(
         body: JSON.stringify({
           pullRequest,
           context: {
-            session: { cli, externalSessionId: toolPayload.session_id },
+            session: hookSession,
+            relatedSessions,
+            parentSession,
             runId: process.env.WR_SESSION_RUN_ID,
             checkout: normalizeStoredCheckout(discoverCheckout(cwd)),
             terminalId: process.env.TERM_SESSION_ID,
@@ -529,6 +546,8 @@ async function runInternal(
       body: JSON.stringify({
         cli,
         payload: { ...hookPayload, cwd: normalizeStoredPath(cwd) },
+        relatedSessions,
+        parentSession,
         ...(checkout === undefined ? {} : { checkout }),
         terminalId: process.env.TERM_SESSION_ID,
       }),
@@ -560,7 +579,9 @@ async function runInternal(
               body: JSON.stringify({
                 url,
                 context: {
-                  session: { cli, externalSessionId: hookPayload.session_id },
+                  session: hookSession,
+                  relatedSessions,
+                  parentSession,
                   runId: process.env.WR_SESSION_RUN_ID,
                   checkout: null,
                   terminalId: process.env.TERM_SESSION_ID,
@@ -898,9 +919,20 @@ const commandParser = or(
   ),
   command(
     "session",
-    command("list", object({ action: constant("session-list"), ...resourceOptions() }), {
-      description: message`List CLI sessions.`,
-    }),
+    or(
+      command("list", object({ action: constant("session-list"), ...resourceOptions() }), {
+        description: message`List CLI sessions.`,
+      }),
+      command(
+        "tree",
+        object({
+          action: constant("session-tree"),
+          session: option("--session", textValue, { description: message`CLI session identity.` }),
+          json: option("--json", { description: message`Output the lineage as JSON.` }),
+        }),
+        { description: message`Show session ancestors and descendants.` },
+      ),
+    ),
     { description: message`Manage CLI sessions.` },
   ),
   command(
@@ -1269,6 +1301,13 @@ try {
     case "session-list":
       await runResource("sessions", cli);
       break;
+    case "session-tree": {
+      const lineage = await client().request<SessionLineage>(
+        `/api/session-lineage?session=${encodeURIComponent(cli.session)}`,
+      );
+      console.log(cli.json ? JSON.stringify(lineage, null, 2) : renderSessionLineage(lineage));
+      break;
+    }
     case "checkout-list":
       await runResource("checkouts", cli);
       break;

@@ -139,6 +139,8 @@ Restart Oh My Pi after installation. To address a Pi session explicitly from a s
 
 SessionStart and UserPromptSubmit outside an enabled repository are ignored. The first submitted prompt is stored on the CLI session and is not overwritten by later prompts. Hook requests silently refresh the same Access OAuth session used by other CLI commands.
 
+When a child agent inherits more than one supported session ID, wr registers every distinct session. A skill or launcher may set `WR_PARENT_CLI_SESSION=<cli>:<id>` for one child launch to record its direct parent; leave it unset when the parent is unknown. wr never infers a direct parent from inherited IDs alone. Inspect a recorded lineage with `wr session tree --session claude:<session-id>`; `--json` returns an ordered `ancestors` path and nested `children`.
+
 ## Commands
 
 The existing resource-oriented command interface remains:

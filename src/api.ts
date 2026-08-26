@@ -17,10 +17,25 @@ export type SessionIdentity = v.InferOutput<typeof SessionIdentitySchema>;
 
 export const ContextInputSchema = v.object({
   session: v.optional(SessionIdentitySchema),
+  relatedSessions: v.optional(v.array(SessionIdentitySchema)),
+  parentSession: v.optional(SessionIdentitySchema),
   runId: v.optional(NonEmptyStringSchema),
   checkout: v.nullable(CheckoutInputSchema),
   terminalId: v.optional(NonEmptyStringSchema),
 });
+
+export type SessionLineageNode = {
+  id: string;
+  cli: SessionIdentity["cli"];
+  externalSessionId: string;
+  status: "active" | "ended";
+  children: SessionLineageNode[];
+};
+
+export type SessionLineage = {
+  ancestors: Omit<SessionLineageNode, "children">[];
+  session: SessionLineageNode;
+};
 
 export type ContextInput = v.InferOutput<typeof ContextInputSchema>;
 

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   clearDevinSession,
   findCurrentSession,
+  findParentSession,
+  findSessionIdentities,
   normalizeStoredPath,
   parseHookPayload,
   parseToolHookPayload,
@@ -38,6 +40,31 @@ describe("session discovery", () => {
         CODEX_THREAD_ID: "codex-thread",
       }),
     ).toEqual({ cli: "pi", externalSessionId: "pi-session" });
+  });
+
+  test("collects every distinct session identity from inherited context", () => {
+    const env = {
+      PI_SESSION_ID: "pi-session",
+      CODEX_THREAD_ID: "codex-thread",
+      CLAUDE_CODE_SESSION_ID: "claude-session",
+      DEVIN_SESSION_ID: "devin-session",
+      WR_CLI_SESSIONS: JSON.stringify(["codex:codex-thread", "claude:ancestor-session"]),
+    };
+    expect(findSessionIdentities(env)).toEqual([
+      { cli: "codex", externalSessionId: "codex-thread" },
+      { cli: "claude", externalSessionId: "ancestor-session" },
+      { cli: "pi", externalSessionId: "pi-session" },
+      { cli: "claude", externalSessionId: "claude-session" },
+      { cli: "devin", externalSessionId: "devin-session" },
+    ]);
+  });
+
+  test("uses only the explicit parent session marker for a direct parent", () => {
+    expect(findParentSession({ WR_PARENT_CLI_SESSION: "claude:parent-session" })).toEqual({
+      cli: "claude",
+      externalSessionId: "parent-session",
+    });
+    expect(findParentSession({ WR_PARENT_CLI_SESSION: "not-a-session" })).toBeNull();
   });
 
   test("fills Devin hook payload cwd from the project directory", () => {
@@ -80,12 +107,26 @@ describe("session discovery", () => {
   });
 });
 
+const sessionEnvironment = [
+  "PI_SESSION_ID",
+  "CODEX_THREAD_ID",
+  "CLAUDE_CODE_SESSION_ID",
+  "DEVIN_SESSION_ID",
+  "WR_CLI_SESSION",
+  "WR_CLI_SESSIONS",
+  "WR_PARENT_CLI_SESSION",
+] as const;
+const originalSessionEnvironment = Object.fromEntries(
+  sessionEnvironment.map((name) => [name, process.env[name]]),
+);
+
 describe("Devin session resolution", () => {
   const originalXdg = process.env.XDG_STATE_HOME;
   const originalChisel = process.env.CHISEL_SESSION_DB;
   const tmpDir = `/tmp/wr-context-test-${Date.now()}`;
 
   beforeEach(() => {
+    for (const name of sessionEnvironment) delete process.env[name];
     mkdirSync(tmpDir, { recursive: true });
     process.env.XDG_STATE_HOME = tmpDir;
     process.env.CHISEL_SESSION_DB = join(tmpDir, "nonexistent", "sessions.db");
@@ -101,6 +142,11 @@ describe("Devin session resolution", () => {
     delete process.env.WR_DEVIN_PROCESS_PID;
     delete process.env.WR_SESSION_RUN_ID;
     rmSync(tmpDir, { recursive: true, force: true });
+    for (const name of sessionEnvironment) {
+      const value = originalSessionEnvironment[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   });
 
   test("finds a persisted Devin session by Devin process pid", () => {

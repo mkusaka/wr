@@ -58,6 +58,73 @@ function parseSessionIdentity(value: string): SessionIdentity {
   }
 }
 
+function parseSessionIdentityOrNull(value: string): SessionIdentity | null {
+  try {
+    return parseSessionIdentity(value);
+  } catch {
+    return null;
+  }
+}
+
+function isSameSession(left: SessionIdentity, right: SessionIdentity): boolean {
+  return left.cli === right.cli && left.externalSessionId === right.externalSessionId;
+}
+
+function addSessionIdentity(
+  sessions: SessionIdentity[],
+  session: SessionIdentity | null | undefined,
+): void {
+  if (session && !sessions.some((candidate) => isSameSession(candidate, session))) {
+    sessions.push(session);
+  }
+}
+
+export function findSessionIdentities(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+  activeSession?: SessionIdentity,
+): SessionIdentity[] {
+  const sessions: SessionIdentity[] = [];
+  try {
+    const stored = JSON.parse(env.WR_CLI_SESSIONS ?? "") as unknown;
+    if (Array.isArray(stored)) {
+      for (const value of stored) {
+        if (typeof value === "string")
+          addSessionIdentity(sessions, parseSessionIdentityOrNull(value));
+      }
+    }
+  } catch {}
+  addSessionIdentity(
+    sessions,
+    env.WR_CLI_SESSION ? parseSessionIdentityOrNull(env.WR_CLI_SESSION) : null,
+  );
+  addSessionIdentity(
+    sessions,
+    env.PI_SESSION_ID ? { cli: "pi", externalSessionId: env.PI_SESSION_ID } : null,
+  );
+  addSessionIdentity(
+    sessions,
+    env.CODEX_THREAD_ID ? { cli: "codex", externalSessionId: env.CODEX_THREAD_ID } : null,
+  );
+  addSessionIdentity(
+    sessions,
+    env.CLAUDE_CODE_SESSION_ID
+      ? { cli: "claude", externalSessionId: env.CLAUDE_CODE_SESSION_ID }
+      : null,
+  );
+  addSessionIdentity(
+    sessions,
+    env.DEVIN_SESSION_ID ? { cli: "devin", externalSessionId: env.DEVIN_SESSION_ID } : null,
+  );
+  if (env === process.env) addSessionIdentity(sessions, resolveDevinSession(env, cwd));
+  addSessionIdentity(sessions, activeSession);
+  return sessions;
+}
+
+export function findParentSession(env: NodeJS.ProcessEnv = process.env): SessionIdentity | null {
+  return env.WR_PARENT_CLI_SESSION ? parseSessionIdentityOrNull(env.WR_PARENT_CLI_SESSION) : null;
+}
+
 function devinSessionPath(): string {
   return join(
     process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? process.cwd(), ".local", "state"),
@@ -226,16 +293,16 @@ export function findCurrentSession(
     }
     return parseSessionIdentity(`${inferCli(env, explicitSession, cwd)}:${explicitSession}`);
   }
-  if (env.PI_SESSION_ID) return { cli: "pi", externalSessionId: env.PI_SESSION_ID };
-  if (env.CODEX_THREAD_ID) return { cli: "codex", externalSessionId: env.CODEX_THREAD_ID };
-  if (env.CLAUDE_CODE_SESSION_ID)
-    return { cli: "claude", externalSessionId: env.CLAUDE_CODE_SESSION_ID };
-  if (env.DEVIN_SESSION_ID) return { cli: "devin", externalSessionId: env.DEVIN_SESSION_ID };
   if (env.WR_CLI_SESSION) return parseSessionIdentity(env.WR_CLI_SESSION);
   if (env === process.env) {
     const data = resolveDevinSession(env, cwd);
     if (data) return data;
   }
+  if (env.PI_SESSION_ID) return { cli: "pi", externalSessionId: env.PI_SESSION_ID };
+  if (env.CODEX_THREAD_ID) return { cli: "codex", externalSessionId: env.CODEX_THREAD_ID };
+  if (env.CLAUDE_CODE_SESSION_ID)
+    return { cli: "claude", externalSessionId: env.CLAUDE_CODE_SESSION_ID };
+  if (env.DEVIN_SESSION_ID) return { cli: "devin", externalSessionId: env.DEVIN_SESSION_ID };
   return null;
 }
 
@@ -254,8 +321,17 @@ function inferCli(env: NodeJS.ProcessEnv, explicitSession?: string, cwd?: string
 export function currentContext(cwd: string, explicitSession?: string): ContextInput {
   const session = findCurrentSession(explicitSession, process.env, cwd);
   if (!session) throw new Error("Could not resolve a session; pass an existing --session ID");
+  const parentSession = findParentSession();
+  const relatedSessions = findSessionIdentities(
+    process.env,
+    cwd,
+    parentSession ?? undefined,
+  ).filter((candidate) => !isSameSession(candidate, session));
   return {
     session,
+    relatedSessions,
+    parentSession:
+      parentSession && !isSameSession(parentSession, session) ? parentSession : undefined,
     runId: process.env.WR_SESSION_RUN_ID,
     checkout: normalizeStoredCheckout(discoverCheckout(cwd)),
     terminalId: process.env.TERM_SESSION_ID,
@@ -272,9 +348,12 @@ export function appendClaudeEnvironment(
   runId: string | null,
 ): void {
   if (!envFile || !runId) return;
+  const sessions = findSessionIdentities(process.env, undefined, identity).map(
+    (session) => `${session.cli}:${session.externalSessionId}`,
+  );
   appendFileSync(
     envFile,
-    `export WR_CLI_SESSION=${shellQuote(`${identity.cli}:${identity.externalSessionId}`)}\nexport WR_SESSION_RUN_ID=${shellQuote(runId)}\n`,
+    `export WR_CLI_SESSION=${shellQuote(`${identity.cli}:${identity.externalSessionId}`)}\nexport WR_CLI_SESSIONS=${shellQuote(JSON.stringify(sessions))}\nexport WR_SESSION_RUN_ID=${shellQuote(runId)}\n`,
   );
 }
 

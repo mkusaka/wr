@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderResource, renderShow } from "../src/output.ts";
+import { renderResource, renderSessionLineage, renderShow } from "../src/output.ts";
 
 describe("resource output", () => {
   test("removes control characters from human-readable output", () => {
@@ -86,5 +86,35 @@ describe("resource output", () => {
     expect(output).toContain("workpad: /tmp/workpad.md");
     expect(output).toContain("devices=Work laptop");
     expect(output).toContain("device=Work laptop");
+  });
+
+  test("renders ancestor path and descendant tree", () => {
+    expect(
+      renderSessionLineage({
+        ancestors: [
+          {
+            id: "codex",
+            cli: "codex",
+            externalSessionId: "parent",
+            status: "ended",
+          },
+        ],
+        session: {
+          id: "claude",
+          cli: "claude",
+          externalSessionId: "child",
+          status: "active",
+          children: [
+            {
+              id: "devin",
+              cli: "devin",
+              externalSessionId: "grandchild",
+              status: "active",
+              children: [],
+            },
+          ],
+        },
+      }),
+    ).toBe("codex:parent [ended]\n└─ claude:child [active]\n   └─ devin:grandchild [active]");
   });
 });
