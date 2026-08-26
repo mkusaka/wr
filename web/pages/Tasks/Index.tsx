@@ -55,7 +55,7 @@ export type Task = {
 export type Run = {
   id: string;
   cliSessionId: string;
-  cli: "codex" | "claude" | "devin";
+  cli: "codex" | "claude" | "devin" | "pi";
   externalSessionId: string;
   terminalId: string | null;
   startedCwd: string | null;
@@ -160,7 +160,7 @@ type TaskRelationships = {
     id: string;
     status: "active" | "finished" | "abandoned";
     sessionRunId: string | null;
-    cli: "codex" | "claude" | "devin";
+    cli: "codex" | "claude" | "devin" | "pi";
     externalSessionId: string;
     worktreePath: string | null;
     branch: string | null;
@@ -188,7 +188,7 @@ type PullRequestRelationships = {
   tasks: Array<{ issueId: string; title: string | null; status: Task["status"] }>;
   runs: Array<{
     id: string;
-    cli: "codex" | "claude" | "devin";
+    cli: "codex" | "claude" | "devin" | "pi";
     externalSessionId: string;
     terminalId: string | null;
     startedAt: string;
@@ -206,6 +206,19 @@ type LoadedRelationships =
   | { kind: "task"; data: TaskRelationships }
   | { kind: "run"; data: TaskRelationships[] }
   | { kind: "pullRequest"; data: PullRequestRelationships };
+
+function resumeCommand(cli: Run["cli"], externalSessionId: string): string {
+  switch (cli) {
+    case "codex":
+      return `codex resume ${externalSessionId}`;
+    case "devin":
+      return `devin --resume ${externalSessionId}`;
+    case "pi":
+      return `pi --session ${externalSessionId}`;
+    case "claude":
+      return `claude --resume ${externalSessionId}`;
+  }
+}
 
 export function filterLedger(ledger: Ledger, filters: Filters) {
   const matchesScope = (record: Run | Task | PullRequest) =>
@@ -834,15 +847,7 @@ export default function TasksIndex({
                   </button>
                   <CardContent className="grid gap-3 text-xs text-muted-foreground">
                     <div className="flex flex-wrap gap-2">
-                      <CopyCommand
-                        command={
-                          run.cli === "codex"
-                            ? `codex resume ${run.externalSessionId}`
-                            : run.cli === "devin"
-                              ? `devin --resume ${run.externalSessionId}`
-                              : `claude --resume ${run.externalSessionId}`
-                        }
-                      />
+                      <CopyCommand command={resumeCommand(run.cli, run.externalSessionId)} />
                       {run.terminalId ? <CopyCommand command={`wr run focus ${run.id}`} /> : null}
                     </div>
                     {filtered.conversationLinks.filter(
@@ -987,13 +992,10 @@ export default function TasksIndex({
                                     ) : null}
                                     <div className="mt-3 flex flex-wrap gap-2">
                                       <CopyCommand
-                                        command={
-                                          execution.cli === "codex"
-                                            ? `codex resume ${execution.externalSessionId}`
-                                            : execution.cli === "devin"
-                                              ? `devin --resume ${execution.externalSessionId}`
-                                              : `claude --resume ${execution.externalSessionId}`
-                                        }
+                                        command={resumeCommand(
+                                          execution.cli,
+                                          execution.externalSessionId,
+                                        )}
                                       />
                                       {execution.sessionRunId ? (
                                         <CopyCommand
@@ -1228,13 +1230,7 @@ export default function TasksIndex({
                                     </p>
                                     <div className="mt-3 flex flex-wrap gap-2">
                                       <CopyCommand
-                                        command={
-                                          run.cli === "codex"
-                                            ? `codex resume ${run.externalSessionId}`
-                                            : run.cli === "devin"
-                                              ? `devin --resume ${run.externalSessionId}`
-                                              : `claude --resume ${run.externalSessionId}`
-                                        }
+                                        command={resumeCommand(run.cli, run.externalSessionId)}
                                       />
                                       <CopyCommand command={`wr run focus ${run.id}`} />
                                       {run.terminalId ? (

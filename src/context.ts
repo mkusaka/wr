@@ -20,7 +20,7 @@ import {
   type ToolHookPayload,
 } from "./validation.ts";
 
-export type Cli = "codex" | "claude" | "devin";
+export type Cli = "codex" | "claude" | "devin" | "pi";
 
 export function normalizeStoredPath(path: string, home = process.env.HOME): string {
   if (!home) return path;
@@ -226,6 +226,7 @@ export function findCurrentSession(
     }
     return parseSessionIdentity(`${inferCli(env, explicitSession, cwd)}:${explicitSession}`);
   }
+  if (env.PI_SESSION_ID) return { cli: "pi", externalSessionId: env.PI_SESSION_ID };
   if (env.CODEX_THREAD_ID) return { cli: "codex", externalSessionId: env.CODEX_THREAD_ID };
   if (env.CLAUDE_CODE_SESSION_ID)
     return { cli: "claude", externalSessionId: env.CLAUDE_CODE_SESSION_ID };
@@ -239,6 +240,7 @@ export function findCurrentSession(
 }
 
 function inferCli(env: NodeJS.ProcessEnv, explicitSession?: string, cwd?: string): Cli {
+  if (env.PI_SESSION_ID) return "pi";
   if (env.CODEX_THREAD_ID) return "codex";
   if (env.CLAUDE_CODE_SESSION_ID) return "claude";
   if (env.DEVIN_SESSION_ID) return "devin";
@@ -246,7 +248,7 @@ function inferCli(env: NodeJS.ProcessEnv, explicitSession?: string, cwd?: string
     const data = resolveDevinSession(env, cwd);
     if (data?.externalSessionId === explicitSession) return "devin";
   }
-  throw new Error("A CLI prefix is required for --session outside Codex, Claude, or Devin");
+  throw new Error("A CLI prefix is required for --session outside Pi, Codex, Claude, or Devin");
 }
 
 export function currentContext(cwd: string, explicitSession?: string): ContextInput {

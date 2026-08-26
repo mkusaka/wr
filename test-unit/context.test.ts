@@ -24,10 +24,20 @@ describe("stored paths", () => {
 
 describe("session discovery", () => {
   test.each([
+    [{ PI_SESSION_ID: "pi-session" }, { cli: "pi", externalSessionId: "pi-session" }],
     [{ DEVIN_SESSION_ID: "polite-axolotl" }, { cli: "devin", externalSessionId: "polite-axolotl" }],
     [{ WR_CLI_SESSION: "devin:calm-otter" }, { cli: "devin", externalSessionId: "calm-otter" }],
   ] as const)("detects %s", (env, expected) => {
     expect(findCurrentSession(undefined, env)).toEqual(expected);
+  });
+
+  test("prefers the Pi session for commands run by Pi", () => {
+    expect(
+      findCurrentSession(undefined, {
+        PI_SESSION_ID: "pi-session",
+        CODEX_THREAD_ID: "codex-thread",
+      }),
+    ).toEqual({ cli: "pi", externalSessionId: "pi-session" });
   });
 
   test("fills Devin hook payload cwd from the project directory", () => {

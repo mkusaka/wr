@@ -83,6 +83,7 @@ Use these commands as SessionStart, UserPromptSubmit, SessionEnd, and PostToolUs
 | Claude Code | `wr internal session-event --cli claude` | `wr internal session-prompt --cli claude` | `wr internal session-end --cli claude` | `wr internal tool-event --cli claude` |
 | Codex       | `wr internal session-event --cli codex`  | `wr internal session-prompt --cli codex`  | `wr internal session-end --cli codex`  | `wr internal tool-event --cli codex`  |
 | Devin CLI   | `wr internal session-event --cli devin`  | `wr internal session-prompt --cli devin`  | `wr internal session-end --cli devin`  | `wr internal tool-event --cli devin`  |
+| Oh My Pi    | `wr internal session-event --cli pi`     | `wr internal session-prompt --cli pi`     | `wr internal session-end --cli pi`     | `wr internal tool-event --cli pi`     |
 
 For PostToolUse, use the `Bash` matcher for Claude Code and Codex, and the `exec` matcher for Devin CLI. The hook extracts one pull request URL from `gh pr create` output and associates it with the current session run. UserPromptSubmit also registers Slack thread permalinks found in the prompt.
 
@@ -127,7 +128,14 @@ For Devin CLI, add the commands under the `hooks` key in `~/.config/devin/config
 }
 ```
 
-Devin sends the stable `session_id` on stdin and exposes the project root as `DEVIN_PROJECT_DIR`; the hook adapter uses that directory as the stored checkout path. To address a Devin session explicitly from a shell, pass `--session devin:<session-id>`.
+Pi exposes its stable session UUID as `PI_SESSION_ID` to commands through its shell tools. Oh My Pi instead exposes the ID through `ctx.sessionManager`; install the bundled adapter to forward it to wr and inject `PI_SESSION_ID` into Bash tool commands:
+
+```bash
+mkdir -p ~/.omp/agent/hooks/pre
+cp integrations/oh-my-pi/wr.ts ~/.omp/agent/hooks/pre/wr.ts
+```
+
+Restart Oh My Pi after installation. To address a Pi session explicitly from a shell, pass `--session pi:<session-id>`.
 
 SessionStart and UserPromptSubmit outside an enabled repository are ignored. The first submitted prompt is stored on the CLI session and is not overwritten by later prompts. Hook requests silently refresh the same Access OAuth session used by other CLI commands.
 

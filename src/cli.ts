@@ -342,17 +342,29 @@ async function runDoctor(): Promise<void> {
       join(process.cwd(), ".devin", "hooks.v1.json"),
       join(process.cwd(), ".devin", "config.json"),
     ];
+    const piPaths = [
+      join(home, ".omp", "agent", "hooks", "pre", "wr.ts"),
+      join(process.cwd(), ".omp", "hooks", "pre", "wr.ts"),
+    ];
     const claude = existsSync(claudePath) ? readFileSync(claudePath, "utf8") : "";
     const codex = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : "";
     const devin = devinPaths
       .filter((path) => existsSync(path))
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
+    const pi = piPaths
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
+    const piStatus =
+      pi.includes("ctx.sessionManager.getSessionId()") && pi.includes(`"--cli", "pi"`)
+        ? "configured"
+        : "missing:adapter";
     lines.push(
-      `hooks claude=${hookStatus(claude, "claude")} codex=${hookStatus(codex, "codex")} devin=${hookStatus(devin, "devin")}`,
+      `hooks claude=${hookStatus(claude, "claude")} codex=${hookStatus(codex, "codex")} devin=${hookStatus(devin, "devin")} pi=${piStatus}`,
     );
   } else {
-    lines.push("hooks claude=unknown codex=unknown devin=unknown");
+    lines.push("hooks claude=unknown codex=unknown devin=unknown pi=unknown");
   }
   console.log(lines.join("\n"));
 }
@@ -415,9 +427,9 @@ async function runInternal(
   try {
     log("parse-start");
     const result = v.safeParse(CliSchema, cliValue);
-    if (!result.success) throw new Error("--cli must be codex, claude, or devin");
+    if (!result.success) throw new Error("--cli must be pi, codex, claude, or devin");
     const cli: Cli = result.output;
-    const payload =
+    const parsedPayload =
       action === "tool-event"
         ? parseToolHookPayload(
             payloadText,
@@ -427,6 +439,10 @@ async function runInternal(
             payloadText,
             cli === "devin" ? process.env.DEVIN_PROJECT_DIR : undefined,
           );
+    const payload =
+      cli === "pi" && process.env.PI_SESSION_ID
+        ? { ...parsedPayload, session_id: process.env.PI_SESSION_ID }
+        : parsedPayload;
     log("parse-completed", { source: "source" in payload ? payload.source : undefined });
 
     // PostToolUse fires for every tool call, so reject on the payload alone before

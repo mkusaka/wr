@@ -361,6 +361,39 @@ describe("wr Worker API", () => {
     expect(session).toEqual({ cli: "devin", initialPrompt: "Track this Devin session" });
   });
 
+  test("records Pi lifecycle events and prompts", async () => {
+    const payload = {
+      session_id: "pi-session",
+      cwd: "/src/example",
+      source: "startup",
+    };
+    expect(
+      (
+        await request("/api/session-events", "pi-device", {
+          cli: "pi",
+          payload,
+          checkout,
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await request("/api/session-prompts", "pi-device", {
+          cli: "pi",
+          payload: { ...payload, prompt: "Track this Pi session" },
+        })
+      ).status,
+    ).toBe(200);
+
+    const db = drizzle((env as unknown as Env).DB, { schema });
+    const session = await db
+      .select({ cli: schema.cliSessions.cli, initialPrompt: schema.cliSessions.initialPrompt })
+      .from(schema.cliSessions)
+      .where(eq(schema.cliSessions.externalSessionId, payload.session_id))
+      .get();
+    expect(session).toEqual({ cli: "pi", initialPrompt: "Track this Pi session" });
+  });
+
   test("sorts sessions by updated time descending", async () => {
     const db = drizzle((env as unknown as Env).DB, { schema });
     await request("/api/session-events", "sort-device", {

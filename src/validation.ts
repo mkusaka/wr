@@ -2,7 +2,7 @@ import * as v from "valibot";
 
 export const NonEmptyStringSchema = v.pipe(v.string(), v.nonEmpty());
 
-export const CliSchema = v.picklist(["codex", "claude", "devin"]);
+export const CliSchema = v.picklist(["codex", "claude", "devin", "pi"]);
 
 export const SessionIdentitySchema = v.object({
   cli: CliSchema,

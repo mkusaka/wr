@@ -136,6 +136,15 @@ describe("TasksIndex", () => {
     expect(new URLSearchParams(window.location.search).has("state")).toBe(false);
   });
 
+  test("renders a Pi session resume command", () => {
+    renderPage({
+      ...pageProps,
+      runs: [{ ...pageProps.runs[0]!, cli: "pi", externalSessionId: "pi-session" }],
+    });
+
+    expect(screen.getByText("pi --session pi-session")).toBeTruthy();
+  });
+
   test("shows non-current count below current results", () => {
     const doneTask: Task = { ...pageProps.tasks[0]!, issueId: "MOQ-101", status: "done" };
     renderPage({ ...pageProps, tasks: [...pageProps.tasks, doneTask] });
