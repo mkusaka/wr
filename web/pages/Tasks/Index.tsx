@@ -543,7 +543,13 @@ export default function TasksIndex({
 
   useEffect(() => {
     if (query === initialQuery.current) return;
-    router.reload();
+    let cancel: (() => void) | undefined;
+    router.reload({
+      onCancelToken: (token) => {
+        cancel = token.cancel;
+      },
+    });
+    return () => cancel?.();
   }, [query]);
 
   const searchDevices = (value: string) => {
