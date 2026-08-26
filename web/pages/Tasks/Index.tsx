@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { matchesQuery } from "../../../src/search.ts";
+import type { SessionLineage, SessionLineageNode } from "../../../src/api.ts";
 
 export type Task = {
   issueId: string;
@@ -149,7 +150,7 @@ const filterParsers = {
 
 type SelectedRecord =
   | { kind: "task"; key: string; issueId: string }
-  | { kind: "run"; key: string; id: string }
+  | { kind: "run"; key: string; id: string; cliSessionId: string }
   | { kind: "pullRequest"; key: string; repo: string; number: number };
 
 type TaskRelationships = {
@@ -401,6 +402,74 @@ function ThemeToggle() {
   );
 }
 
+function SessionLineageChildren({
+  children,
+  depth,
+  selectedSessionId,
+}: {
+  children: SessionLineageNode[];
+  depth: number;
+  selectedSessionId: string;
+}) {
+  return children.map((child, index) => {
+    const last = index === children.length - 1;
+    return (
+      <div key={child.id}>
+        <div
+          className={`flex flex-wrap items-center gap-2 font-mono text-xs ${child.id === selectedSessionId ? "font-semibold text-foreground" : ""}`}
+          style={{ paddingLeft: `${depth * 0.75}rem` }}
+        >
+          <span aria-hidden="true">{last ? "└─" : "├─"}</span>
+          <span>
+            {child.cli}:{child.externalSessionId}
+          </span>
+          <Badge variant="outline">{child.status}</Badge>
+        </div>
+        <SessionLineageChildren
+          children={child.children}
+          depth={depth + 1}
+          selectedSessionId={selectedSessionId}
+        />
+      </div>
+    );
+  });
+}
+
+function SessionLineagePanel({
+  lineage,
+  selectedSessionId,
+}: {
+  lineage: SessionLineage;
+  selectedSessionId: string;
+}) {
+  const path = [...lineage.ancestors, lineage.session];
+  return (
+    <section className="grid gap-2" aria-label="Session lineage">
+      <h3 className="text-xs font-medium text-muted-foreground uppercase">Lineage</h3>
+      <div className="grid gap-1">
+        {path.map((session, index) => (
+          <div
+            key={session.id}
+            className={`flex flex-wrap items-center gap-2 font-mono text-xs ${session.id === selectedSessionId ? "font-semibold text-foreground" : ""}`}
+            style={{ paddingLeft: `${index * 0.75}rem` }}
+          >
+            {index > 0 ? <span aria-hidden="true">└─</span> : null}
+            <span>
+              {session.cli}:{session.externalSessionId}
+            </span>
+            <Badge variant="outline">{session.status}</Badge>
+          </div>
+        ))}
+        <SessionLineageChildren
+          children={lineage.session.children}
+          depth={lineage.ancestors.length + 1}
+          selectedSessionId={selectedSessionId}
+        />
+      </div>
+    </section>
+  );
+}
+
 export default function TasksIndex({
   runs,
   tasks,
@@ -437,6 +506,9 @@ export default function TasksIndex({
   const [relationships, setRelationships] = useState<LoadedRelationships | null>(null);
   const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [relationshipsLoading, setRelationshipsLoading] = useState(false);
+  const [lineage, setLineage] = useState<SessionLineage | null>(null);
+  const [lineageError, setLineageError] = useState<string | null>(null);
+  const [lineageLoading, setLineageLoading] = useState(false);
   const initialQuery = useRef(query);
   const filtered = useMemo(
     () =>
@@ -555,6 +627,34 @@ export default function TasksIndex({
       })
       .finally(() => {
         if (!controller.signal.aborted) setRelationshipsLoading(false);
+      });
+    return () => controller.abort();
+  }, [selected]);
+
+  useEffect(() => {
+    if (selected?.kind !== "run") {
+      setLineage(null);
+      setLineageError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLineage(null);
+    setLineageError(null);
+    setLineageLoading(true);
+    void fetch(`/api/session-lineage?id=${encodeURIComponent(selected.cliSessionId)}`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Could not load lineage (${response.status})`);
+        setLineage((await response.json()) as SessionLineage);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name !== "AbortError") setLineageError(error.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLineageLoading(false);
       });
     return () => controller.abort();
   }, [selected]);
@@ -815,7 +915,12 @@ export default function TasksIndex({
                       setSelected(
                         selected?.kind === "run" && selected.key === run.id
                           ? null
-                          : { kind: "run", key: run.id, id: run.id },
+                          : {
+                              kind: "run",
+                              key: run.id,
+                              id: run.id,
+                              cliSessionId: run.cliSessionId,
+                            },
                       )
                     }
                   >
@@ -872,7 +977,20 @@ export default function TasksIndex({
                     ) : null}
                   </CardContent>
                   {selected?.kind === "run" && selected.key === run.id ? (
-                    <CardContent className="border-t pt-4" aria-live="polite">
+                    <CardContent className="grid gap-4 border-t pt-4" aria-live="polite">
+                      {lineageLoading ? (
+                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <LoaderCircleIcon className="size-4 animate-spin" />
+                          Loading lineage
+                        </p>
+                      ) : lineageError ? (
+                        <p className="text-sm text-destructive">{lineageError}</p>
+                      ) : lineage ? (
+                        <SessionLineagePanel
+                          lineage={lineage}
+                          selectedSessionId={selected.cliSessionId}
+                        />
+                      ) : null}
                       {relationshipsLoading ? (
                         <p className="flex items-center gap-2 text-sm text-muted-foreground">
                           <LoaderCircleIcon className="size-4 animate-spin" />
