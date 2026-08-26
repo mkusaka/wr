@@ -1,6 +1,6 @@
 ---
 name: ops-wr
-description: Operate the wr relationship-ledger CLI and the paired Linear/Jira task workflow to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use for routine task tracking, attaching or removing artifacts, listing related records, synchronizing explicitly, focusing an iTerm2 pane, or diagnosing ambiguous task context.
+description: Operate the wr relationship ledger and paired Linear/Jira workflow; apply or inspect this repository's remote Cloudflare D1 migrations through Drizzle Kit with Wrangler authentication. Use for task/session/worktree/PR/workpad operations, D1/Drizzle migration history, remote migration application, or Wrangler credential setup.
 ---
 
 # Operate wr
@@ -148,3 +148,29 @@ Workpad references may be existing paths or identifiers such as task IDs. Existi
 - Do not infer task dependencies or start workflows.
 - Do not place `wr sync` in lifecycle hooks; invoke it after explicit GitHub work or before handoff.
 - Report ambiguity or command failure instead of creating speculative relationships.
+
+## D1 Migrations
+
+This repository uses Drizzle's `__drizzle_migrations` history, separate from Wrangler's `d1_migrations` history. Never apply schema or migration-history changes through `wrangler d1 execute` or `wrangler d1 migrations apply`. Use Wrangler only for read-only history inspection and for securely obtaining credentials for Drizzle Kit.
+
+If `bunx wrangler d1 migrations apply DB --remote` reports historical migrations as pending on an existing remote DB with `__drizzle_migrations`, do not apply them. It uses the wrong history table and can replay an already-applied schema change.
+
+Inspect both histories before deciding:
+
+```bash
+bunx wrangler d1 execute DB --remote --command "SELECT * FROM sqlite_schema WHERE name IN ('__drizzle_migrations','d1_migrations')"
+bunx wrangler d1 execute DB --remote --command "SELECT * FROM __drizzle_migrations ORDER BY created_at"
+bunx wrangler d1 execute DB --remote --command "SELECT * FROM d1_migrations ORDER BY applied_at"
+```
+
+Apply generated migrations only through Drizzle Kit:
+
+```bash
+env \
+  CLOUDFLARE_ACCOUNT_ID="$(bunx wrangler whoami --json | jq -r '.accounts[0].id')" \
+  CLOUDFLARE_DATABASE_ID="$(bunx wrangler d1 list --json | jq -r '.[] | select(.name == "wr") | .uuid')" \
+  CLOUDFLARE_D1_TOKEN="$(bunx wrangler auth token --json | jq -r '.token')" \
+  bun run db:migrate
+```
+
+The JSON form of `wrangler auth token` prevents the Wrangler banner from entering `CLOUDFLARE_D1_TOKEN`. Keep the token in command substitution or an environment variable; never print it. If credential acquisition or Drizzle migration fails, stop and report the failure. Do not substitute a direct D1 write.

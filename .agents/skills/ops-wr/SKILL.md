@@ -1,6 +1,6 @@
 ---
 name: ops-wr
-description: Operate the wr relationship-ledger CLI and the paired Linear/Jira task workflow to register and inspect tasks, CLI sessions, Git worktrees, pull requests, and workpads. Use for routine task tracking, attaching or removing artifacts, listing related records, synchronizing explicitly, focusing an iTerm2 pane, or diagnosing ambiguous task context.
+description: Operate the wr relationship ledger and paired Linear/Jira workflow; apply or inspect this repository's remote Cloudflare D1 migrations through Drizzle Kit with Wrangler authentication. Use for task/session/worktree/PR/workpad operations, D1/Drizzle migration history, remote migration application, or Wrangler credential setup.
 ---
 
 # Operate wr
@@ -148,7 +148,7 @@ Workpad references may be existing paths or identifiers such as task IDs. Existi
 
 ## D1 Migrations
 
-This repo uses Drizzle's `__drizzle_migrations` history table, which is separate from Wrangler's `d1_migrations` history table on the remote D1 database. If `bunx wrangler d1 migrations apply DB --remote` reports all historical migrations as pending, do not apply them to an existing remote DB that already has a `__drizzle_migrations` record. Applying them blindly can re-run already-applied schema changes.
+This repo uses Drizzle's `__drizzle_migrations` history table, separate from Wrangler's `d1_migrations` table. Never apply schema or migration-history changes through `wrangler d1 execute` or `wrangler d1 migrations apply`; use Wrangler only for read-only history inspection and secure credential acquisition for Drizzle Kit.
 
 Inspect both histories before deciding:
 
@@ -168,4 +168,4 @@ env \
   bun run db:migrate
 ```
 
-The JSON form of `wrangler auth token` prevents the Wrangler banner from being included in `CLOUDFLARE_D1_TOKEN`. Keep the token in command substitution or an environment variable and do not print it.
+The JSON form of `wrangler auth token` prevents the Wrangler banner from entering `CLOUDFLARE_D1_TOKEN`. Keep the token in command substitution or an environment variable; never print it. If credential acquisition or Drizzle migration fails, stop and report the failure. Do not substitute a direct D1 write.

@@ -1,6 +1,6 @@
 ---
 name: wr
-description: Use the wr CLI relationship ledger to register and inspect tasks, CLI sessions, Git checkouts, pull requests, workpads, conversation links, and device metadata. Use when working with this repository's wr CLI or Web UI; keep remote D1 and Wrangler migration procedures in the repo-local ops-wr skill.
+description: Use the wr CLI relationship ledger for tasks, CLI sessions, checkouts, pull requests, workpads, conversations, and device metadata. For this repository's remote D1, Drizzle, or Wrangler migration work, read the repository-local `ops-wr` skill first.
 ---
 
 # wr CLI
@@ -95,6 +95,6 @@ Pull request cards include the associated device name, and branch names are copy
 - Keep CLI parsing and local context discovery in `src/`.
 - Keep Web UI rendering and filtering in `web/`.
 - Keep generated SQL and Drizzle metadata under `migrations/`.
-- Keep remote D1 history inspection, Wrangler authentication, and migration application in `.agents/skills/ops-wr/SKILL.md`.
+- For remote D1, Drizzle, or Wrangler migration work, read `.agents/skills/ops-wr/SKILL.md` before any database command; only Drizzle Kit may apply schema or migration-history changes.
 
 When changing a relationship, inspect its CLI command, API endpoint, persistence schema, Web UI projection, and focused tests together.
