@@ -953,15 +953,53 @@ describe("wr Worker API", () => {
       await request("/api/show?task=MOQ-7", "show-device")
     ).json<
       Array<{
-        executions: Array<{ sessionRunId: string | null }>;
-        pullRequests: unknown[];
-        links: unknown[];
+        deviceNames: string[];
+        executions: Array<{ deviceName: string; sessionRunId: string | null }>;
+        pullRequests: Array<{ deviceNames: string[] }>;
+        links: Array<{ deviceName: string }>;
       }>
     >();
     expect(result).toHaveLength(1);
     expect(result[0]?.executions).toHaveLength(1);
     expect(result[0]?.pullRequests).toHaveLength(1);
     expect(result[0]?.links).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      deviceNames: ["show-device"],
+      executions: [{ deviceName: "show-device" }],
+      pullRequests: [{ deviceNames: ["show-device"] }],
+      links: [{ deviceName: "show-device" }],
+    });
+    const [tasks, pullRequests, sessions, runs, checkouts, executions, links, repos] =
+      await Promise.all([
+        (await request("/api/tasks", "show-device")).json<Array<Record<string, unknown>>>(),
+        (await request("/api/pull-requests", "show-device")).json<Array<Record<string, unknown>>>(),
+        (await request("/api/device/resources/sessions", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+        (await request("/api/device/resources/runs", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+        (await request("/api/device/resources/checkouts", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+        (await request("/api/device/resources/executions", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+        (await request("/api/device/resources/links", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+        (await request("/api/device/resources/repos", "show-device")).json<
+          Array<Record<string, unknown>>
+        >(),
+      ]);
+    expect(tasks[0]).toMatchObject({ deviceNames: ["show-device"] });
+    expect(pullRequests[0]).toMatchObject({ deviceNames: ["show-device"] });
+    expect(sessions[0]).toMatchObject({ deviceName: "show-device" });
+    expect(runs[0]).toMatchObject({ deviceName: "show-device" });
+    expect(checkouts[0]).toMatchObject({ deviceName: "show-device" });
+    expect(executions[0]).toMatchObject({ deviceName: "show-device" });
+    expect(links[0]).toMatchObject({ deviceName: "show-device" });
+    expect(repos[0]).toMatchObject({ deviceNames: ["show-device"] });
 
     const fromRun = await (
       await request(`/api/show?run=${result[0]?.executions[0]?.sessionRunId}`, "show-device")

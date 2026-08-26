@@ -121,6 +121,34 @@ function pullRequestScope(userId: string, deviceId: string | undefined, all: boo
   )`;
 }
 
+function taskDeviceNames(userId: string): SQL<string> {
+  return sql<string>`coalesce((select json_group_array(device_name) from (
+    select d.name as device_name
+    from devices d
+    where d.id = ${schema.tasks.createdByDeviceId} and d.user_id = ${userId}
+    union
+    select d.name as device_name
+    from executions e join devices d on d.id = e.device_id
+    where e.task_id = ${sql.raw('"tasks"."id"')} and d.user_id = ${userId}
+    union
+    select d.name as device_name
+    from workpad_links w join devices d on d.id = w.device_id
+    where w.task_id = ${sql.raw('"tasks"."id"')} and d.user_id = ${userId}
+  )), '[]')`;
+}
+
+function pullRequestDeviceNames(userId: string): SQL<string> {
+  return sql<string>`coalesce((select json_group_array(device_name) from (
+    select d.name as device_name
+    from devices d
+    where d.id = ${schema.pullRequests.createdByDeviceId} and d.user_id = ${userId}
+    union
+    select d.name as device_name
+    from session_run_pull_requests srp join devices d on d.id = srp.device_id
+    where srp.pull_request_id = ${sql.raw('"pull_requests"."id"')} and d.user_id = ${userId}
+  )), '[]')`;
+}
+
 async function ensureTask(db: Database, deviceId: string, issue: string) {
   const existing = await db
     .select({ id: schema.tasks.id })
@@ -254,9 +282,12 @@ function requireDevice(deviceId: string | undefined): string {
   return deviceId;
 }
 
-function decodeLocations<T extends { repoRoots: string; worktreePaths: string }>(rows: T[]) {
-  return rows.map(({ repoRoots, worktreePaths, ...row }) => ({
+function decodeLocations<
+  T extends { repoRoots: string; worktreePaths: string; deviceNames?: string },
+>(rows: T[]) {
+  return rows.map(({ repoRoots, worktreePaths, deviceNames, ...row }) => ({
     ...row,
+    ...(deviceNames === undefined ? {} : { deviceNames: JSON.parse(deviceNames) }),
     repoRoots: JSON.parse(repoRoots),
     worktreePaths: JSON.parse(worktreePaths),
   }));
@@ -382,6 +413,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             linearIssueId: schema.tasks.issueId,
             title: schema.tasks.title,
             status: schema.tasks.status,
+            deviceNames: taskDeviceNames(userId),
             createdAt: schema.tasks.createdAt,
             updatedAt: schema.tasks.updatedAt,
             repoRoots: sql<string>`coalesce((select json_group_array(repo_root) from (
@@ -1061,6 +1093,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             state: schema.pullRequests.state,
             parentNumber: parentPullRequests.number,
             linearIssueId: sql<string | null>`group_concat(${schema.tasks.issueId})`,
+            deviceNames: pullRequestDeviceNames(userId),
             createdAt: schema.pullRequests.createdAt,
             repoRoots: sql<string>`coalesce((select json_group_array(repo_root) from (
             select distinct c.repo_root as repo_root
@@ -1206,6 +1239,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                   SELECT 1 FROM session_runs sr
                   WHERE sr.cli_session_id = ${schema.cliSessions.id} AND sr.ended_at IS NULL
                 ) THEN 'active' ELSE 'ended' END`,
+                deviceName: schema.devices.name,
                 createdAt: schema.cliSessions.createdAt,
                 updatedAt: sql<string>`coalesce(${schema.cliSessions.updatedAt}, ${schema.cliSessions.createdAt})`,
                 repoRoots: sql<string>`coalesce((select json_group_array(repo_root) from (
@@ -1226,6 +1260,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               )), '[]')`,
               })
               .from(schema.cliSessions)
+              .innerJoin(schema.devices, eq(schema.devices.id, schema.cliSessions.deviceId))
               .where(scopedDevice(schema.cliSessions.deviceId, userId, deviceId, all))
               .orderBy(
                 desc(
@@ -1248,6 +1283,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 startedCwd: schema.sessionRuns.startedCwd,
                 source: schema.sessionRuns.source,
                 status: sql<string>`CASE WHEN ${schema.sessionRuns.endedAt} IS NULL THEN 'active' ELSE 'ended' END`,
+                deviceName: schema.devices.name,
                 startedAt: schema.sessionRuns.startedAt,
                 lastSeenAt: schema.sessionRuns.lastSeenAt,
                 endedAt: schema.sessionRuns.endedAt,
@@ -1270,6 +1306,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 schema.cliSessions,
                 eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId),
               )
+              .innerJoin(schema.devices, eq(schema.devices.id, schema.sessionRuns.deviceId))
               .where(
                 and(
                   scopedDevice(schema.sessionRuns.deviceId, userId, deviceId, all),
@@ -1290,9 +1327,11 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               repoRoot: schema.checkouts.repoRoot,
               worktreePath: schema.checkouts.worktreePath,
               branch: schema.checkouts.branch,
+              deviceName: schema.devices.name,
               createdAt: schema.checkouts.createdAt,
             })
             .from(schema.checkouts)
+            .innerJoin(schema.devices, eq(schema.devices.id, schema.checkouts.deviceId))
             .where(
               and(
                 scopedDevice(schema.checkouts.deviceId, userId, deviceId, all),
@@ -1313,6 +1352,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               runId: schema.executions.sessionRunId,
               checkoutId: schema.executions.checkoutId,
               status: schema.executions.status,
+              deviceName: schema.devices.name,
               startedAt: schema.executions.startedAt,
               finishedAt: schema.executions.finishedAt,
               repoRoot: schema.checkouts.repoRoot,
@@ -1324,6 +1364,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               schema.cliSessions,
               eq(schema.cliSessions.id, schema.executions.cliSessionId),
             )
+            .innerJoin(schema.devices, eq(schema.devices.id, schema.executions.deviceId))
             .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.executions.checkoutId))
             .where(scopedDevice(schema.executions.deviceId, userId, deviceId, all))
             .orderBy(desc(schema.executions.startedAt)),
@@ -1337,11 +1378,13 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             worktreePath: schema.checkouts.worktreePath,
             kind: sql<string>`'workpad'`,
             ref: schema.workpadLinks.ref,
+            deviceName: schema.devices.name,
             createdAt: schema.workpadLinks.createdAt,
           })
           .from(schema.workpadLinks)
           .leftJoin(schema.tasks, eq(schema.tasks.id, schema.workpadLinks.taskId))
           .innerJoin(schema.checkouts, eq(schema.checkouts.id, schema.workpadLinks.checkoutId))
+          .innerJoin(schema.devices, eq(schema.devices.id, schema.workpadLinks.deviceId))
           .where(scopedDevice(schema.workpadLinks.deviceId, userId, deviceId, all));
         const conversationLinks = await db
           .select({
@@ -1351,10 +1394,12 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             worktreePath: schema.checkouts.worktreePath,
             kind: sql<string>`'conversation'`,
             ref: schema.conversationLinks.url,
+            deviceName: schema.devices.name,
             createdAt: schema.conversationLinks.createdAt,
           })
           .from(schema.conversationLinks)
           .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
+          .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
           .where(scopedDevice(schema.conversationLinks.deviceId, userId, deviceId, all));
         return c.json(
           [...workpadLinks, ...conversationLinks].toSorted((a, b) =>
@@ -1362,19 +1407,28 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           ),
         );
       }
-      case "repos":
+      case "repos": {
+        const rows = await db
+          .select({
+            repoRoot: schema.checkouts.repoRoot,
+            worktreeCount: sql<number>`count(DISTINCT ${schema.checkouts.worktreePath})`,
+            deviceNames: sql<string>`json_group_array(DISTINCT ${schema.devices.name})`,
+            updatedAt: sql<string>`max(${schema.checkouts.createdAt})`,
+          })
+          .from(schema.checkouts)
+          .innerJoin(schema.devices, eq(schema.devices.id, schema.checkouts.deviceId))
+          .where(scopedDevice(schema.checkouts.deviceId, userId, deviceId, all))
+          .groupBy(schema.checkouts.repoRoot)
+          .orderBy(desc(sql`max(${schema.checkouts.createdAt})`));
         return c.json(
-          await db
-            .select({
-              repoRoot: schema.checkouts.repoRoot,
-              worktreeCount: sql<number>`count(DISTINCT ${schema.checkouts.worktreePath})`,
-              updatedAt: sql<string>`max(${schema.checkouts.createdAt})`,
-            })
-            .from(schema.checkouts)
-            .where(scopedDevice(schema.checkouts.deviceId, userId, deviceId, all))
-            .groupBy(schema.checkouts.repoRoot)
-            .orderBy(desc(sql`max(${schema.checkouts.createdAt})`)),
+          rows.map((row) => ({
+            repoRoot: row.repoRoot,
+            worktreeCount: row.worktreeCount,
+            deviceNames: JSON.parse(row.deviceNames),
+            updatedAt: row.updatedAt,
+          })),
         );
+      }
       default:
         throw new HTTPException(404);
     }
@@ -1467,6 +1521,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             linearIssueId: schema.tasks.issueId,
             title: schema.tasks.title,
             status: schema.tasks.status,
+            deviceNames: taskDeviceNames(userId),
           })
           .from(schema.tasks)
           .where(eq(schema.tasks.issueId, issue))
@@ -1476,6 +1531,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             linearIssueId: schema.tasks.issueId,
             title: schema.tasks.title,
             status: schema.tasks.status,
+            deviceNames: taskDeviceNames(userId),
           })
           .from(schema.tasks)
           .innerJoin(schema.executions, eq(schema.executions.taskId, schema.tasks.id))
@@ -1498,6 +1554,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           linearIssueId: task.linearIssueId,
           title: task.title,
           status: task.status,
+          deviceNames: JSON.parse(task.deviceNames),
           executions: await db
             .select({
               id: schema.executions.id,
@@ -1505,6 +1562,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               sessionRunId: schema.executions.sessionRunId,
               cli: schema.cliSessions.cli,
               externalSessionId: schema.cliSessions.externalSessionId,
+              deviceName: schema.devices.name,
               worktreePath: schema.checkouts.worktreePath,
               branch: schema.checkouts.branch,
             })
@@ -1513,6 +1571,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               schema.cliSessions,
               eq(schema.cliSessions.id, schema.executions.cliSessionId),
             )
+            .innerJoin(schema.devices, eq(schema.devices.id, schema.executions.deviceId))
             .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.executions.checkoutId))
             .where(
               and(
@@ -1521,28 +1580,48 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               ),
             )
             .orderBy(schema.executions.startedAt),
-          pullRequests: await db
-            .select({
-              repo: schema.pullRequests.repo,
-              number: schema.pullRequests.number,
-              url: schema.pullRequests.url,
-              headBranch: schema.pullRequests.headBranch,
-              baseBranch: schema.pullRequests.baseBranch,
-              state: schema.pullRequests.state,
-              parentNumber: parentPullRequests.number,
-            })
-            .from(schema.taskPullRequests)
-            .innerJoin(
-              schema.pullRequests,
-              eq(schema.pullRequests.id, schema.taskPullRequests.pullRequestId),
-            )
-            .leftJoin(parentPullRequests, eq(parentPullRequests.id, schema.pullRequests.parentPrId))
-            .where(eq(schema.taskPullRequests.taskId, task.id))
-            .orderBy(schema.pullRequests.number),
+          pullRequests: (
+            await db
+              .select({
+                repo: schema.pullRequests.repo,
+                number: schema.pullRequests.number,
+                url: schema.pullRequests.url,
+                headBranch: schema.pullRequests.headBranch,
+                baseBranch: schema.pullRequests.baseBranch,
+                state: schema.pullRequests.state,
+                parentNumber: parentPullRequests.number,
+                deviceNames: pullRequestDeviceNames(userId),
+              })
+              .from(schema.taskPullRequests)
+              .innerJoin(
+                schema.pullRequests,
+                eq(schema.pullRequests.id, schema.taskPullRequests.pullRequestId),
+              )
+              .leftJoin(
+                parentPullRequests,
+                eq(parentPullRequests.id, schema.pullRequests.parentPrId),
+              )
+              .where(eq(schema.taskPullRequests.taskId, task.id))
+              .orderBy(schema.pullRequests.number)
+          ).map((pullRequest) => ({
+            repo: pullRequest.repo,
+            number: pullRequest.number,
+            url: pullRequest.url,
+            headBranch: pullRequest.headBranch,
+            baseBranch: pullRequest.baseBranch,
+            state: pullRequest.state,
+            parentNumber: pullRequest.parentNumber,
+            deviceNames: JSON.parse(pullRequest.deviceNames),
+          })),
           links: [
             ...(await db
-              .select({ kind: sql<string>`'workpad'`, ref: schema.workpadLinks.ref })
+              .select({
+                kind: sql<string>`'workpad'`,
+                ref: schema.workpadLinks.ref,
+                deviceName: schema.devices.name,
+              })
               .from(schema.workpadLinks)
+              .innerJoin(schema.devices, eq(schema.devices.id, schema.workpadLinks.deviceId))
               .where(
                 and(
                   deviceScope(schema.workpadLinks.deviceId, userId),
@@ -1554,12 +1633,14 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               .selectDistinct({
                 kind: sql<string>`'conversation'`,
                 ref: schema.conversationLinks.url,
+                deviceName: schema.devices.name,
               })
               .from(schema.conversationLinks)
               .innerJoin(
                 schema.executions,
                 eq(schema.executions.cliSessionId, schema.conversationLinks.cliSessionId),
               )
+              .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
               .where(
                 and(
                   deviceScope(schema.conversationLinks.deviceId, userId),

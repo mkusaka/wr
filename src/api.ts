@@ -56,6 +56,7 @@ export type ShowTask = {
   linearIssueId: string;
   title: string | null;
   status: string;
+  deviceNames: string[];
   executions: Array<Record<string, unknown>>;
   pullRequests: Array<Record<string, unknown>>;
   links: Array<Record<string, unknown>>;

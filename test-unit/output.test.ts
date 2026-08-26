@@ -58,22 +58,33 @@ describe("resource output", () => {
         linearIssueId: "MOQ-1",
         title: "Task",
         status: "active",
+        deviceNames: ["Work laptop"],
         executions: [
           {
             status: "active",
             cli: "codex",
             externalSessionId: "thread",
+            deviceName: "Work laptop",
             worktreePath: "/src/repo",
             branch: "main",
           },
         ],
-        pullRequests: [{ repo: "example/repo", number: 1, url: "https://example.test/1" }],
-        links: [{ kind: "workpad", ref: "/tmp/workpad.md" }],
+        pullRequests: [
+          {
+            repo: "example/repo",
+            number: 1,
+            url: "https://example.test/1",
+            deviceNames: ["Work laptop"],
+          },
+        ],
+        links: [{ kind: "workpad", ref: "/tmp/workpad.md", deviceName: "Work laptop" }],
       },
     ]);
     expect(output).toContain("Task MOQ-1 [active] Task");
     expect(output).toContain("Execution active: codex:thread");
     expect(output).toContain("PR example/repo#1");
     expect(output).toContain("workpad: /tmp/workpad.md");
+    expect(output).toContain("devices=Work laptop");
+    expect(output).toContain("device=Work laptop");
   });
 });

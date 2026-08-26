@@ -41,7 +41,7 @@ export function renderResource(
             `${status}:`,
             ...tasks.map(
               (task) =>
-                `  ${terminalText(task.linearIssueId)}${task.title ? ` ${terminalText(task.title)}` : ""} updated=${terminalText(task.updatedAt)}`,
+                `  ${terminalText(task.linearIssueId)}${task.title ? ` ${terminalText(task.title)}` : ""} devices=${terminalText(task.deviceNames)} updated=${terminalText(task.updatedAt)}`,
             ),
           ].join("\n");
         })
@@ -88,23 +88,25 @@ export function renderShow(tasks: ShowTask[]): string {
   return tasks
     .map((task) => {
       const lines = [
-        `Task ${terminalText(task.linearIssueId)} [${terminalText(task.status)}]${task.title ? ` ${terminalText(task.title)}` : ""}`,
+        `Task ${terminalText(task.linearIssueId)} [${terminalText(task.status)}]${task.title ? ` ${terminalText(task.title)}` : ""} devices=${terminalText(task.deviceNames)}`,
       ];
       for (const execution of task.executions) {
         const checkout = execution.worktreePath
           ? ` ${terminalText(execution.worktreePath)}${execution.branch ? ` (${terminalText(execution.branch)})` : ""}`
           : "";
         lines.push(
-          `  Execution ${terminalText(execution.status)}: ${terminalText(execution.cli)}:${terminalText(execution.externalSessionId)}${checkout}`,
+          `  Execution ${terminalText(execution.status)}: ${terminalText(execution.cli)}:${terminalText(execution.externalSessionId)} device=${terminalText(execution.deviceName)}${checkout}`,
         );
       }
       for (const pullRequest of task.pullRequests) {
         lines.push(
-          `  PR ${terminalText(pullRequest.repo)}#${terminalText(pullRequest.number)}${pullRequest.parentNumber ? ` parent=#${terminalText(pullRequest.parentNumber)}` : ""} ${terminalText(pullRequest.url)}`,
+          `  PR ${terminalText(pullRequest.repo)}#${terminalText(pullRequest.number)}${pullRequest.parentNumber ? ` parent=#${terminalText(pullRequest.parentNumber)}` : ""} devices=${terminalText(pullRequest.deviceNames)} ${terminalText(pullRequest.url)}`,
         );
       }
       for (const link of task.links)
-        lines.push(`  ${terminalText(link.kind)}: ${terminalText(link.ref)}`);
+        lines.push(
+          `  ${terminalText(link.kind)}: ${terminalText(link.ref)} device=${terminalText(link.deviceName)}`,
+        );
       return lines.join("\n");
     })
     .join("\n\n");
