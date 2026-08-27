@@ -106,6 +106,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(router, "reload").mockImplementation(() => undefined);
+  vi.spyOn(router, "get").mockImplementation(() => undefined);
 });
 
 describe("TasksIndex", () => {
@@ -162,23 +163,43 @@ describe("TasksIndex", () => {
     });
 
     expect(screen.getByText("+ 1 non-current")).toBeTruthy();
-    expect(router.reload).not.toHaveBeenCalled();
+    await waitFor(() => expect(router.get).toHaveBeenCalled());
   });
 
-  test("does not reload the page while typing in the search box", async () => {
+  test("cancels a prior query reload before starting the next", async () => {
+    const cancelFirstReload = vi.fn();
+    vi.mocked(router.get)
+      .mockImplementationOnce((_url, _data, options) => {
+        options?.onCancelToken?.({ cancel: cancelFirstReload });
+      })
+      .mockImplementationOnce((_url, _data, options) => {
+        options?.onCancelToken?.({ cancel: vi.fn() });
+      });
     renderPage();
+
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    fireEvent.change(search, { target: { value: "P" } });
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1));
+    fireEvent.change(search, { target: { value: "Pa" } });
+
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(2));
+    expect(cancelFirstReload).toHaveBeenCalledOnce();
+  });
+
+  test("cancels an active query reload on unmount", async () => {
+    const cancelReload = vi.fn();
+    vi.mocked(router.get).mockImplementation((_url, _data, options) =>
+      options?.onCancelToken?.({ cancel: cancelReload }),
+    );
+    const { unmount } = renderPage();
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
       target: { value: "P" },
     });
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
-      target: { value: "Pa" },
-    });
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1));
+    unmount();
 
-    await waitFor(() =>
-      expect(new URLSearchParams(window.location.search).get("q")).toBe("Pa"),
-    );
-    expect(router.reload).not.toHaveBeenCalled();
+    expect(cancelReload).toHaveBeenCalledOnce();
   });
 
   test("loads related tasks from a run", async () => {

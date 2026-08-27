@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Autocomplete } from "react-aria-components";
+import { router } from "@inertiajs/react";
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -509,6 +510,8 @@ export default function TasksIndex({
   const [lineage, setLineage] = useState<SessionLineage | null>(null);
   const [lineageError, setLineageError] = useState<string | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
+  const initialQuery = useRef(query);
+  const queryVisitCancel = useRef<(() => void) | undefined>(undefined);
   const filtered = useMemo(
     () =>
       filterLedger(
@@ -539,6 +542,19 @@ export default function TasksIndex({
     filtered.conversationLinks.length;
   const nonCurrentTotal = filtered.nonCurrentTotal;
   const globalSearch = queryState.global ? "&global=true" : "";
+
+  useEffect(() => {
+    if (query === initialQuery.current) return;
+    void router.get(window.location.pathname + window.location.search, undefined, {
+      replace: true,
+      preserveState: true,
+      preserveScroll: true,
+      onCancelToken: (token) => {
+        queryVisitCancel.current = token.cancel;
+      },
+    });
+    return () => queryVisitCancel.current?.();
+  }, [query]);
 
   const searchDevices = (value: string) => {
     setDeviceInput(value);
