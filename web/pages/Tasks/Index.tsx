@@ -13,9 +13,8 @@ import {
   SunIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Autocomplete, useFilter } from "react-aria-components";
-import { router } from "@inertiajs/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Autocomplete } from "react-aria-components";
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -487,8 +486,6 @@ export default function TasksIndex({
   repositories: Repository[];
   worktrees: Worktree[];
 }) {
-  const { contains } = useFilter({ sensitivity: "base" });
-  const [, startTransition] = useTransition();
   const [queryState, setQueryState] = useQueryStates(filterParsers, { history: "replace" });
   const query = queryState.q;
   const type = queryState.type;
@@ -496,6 +493,9 @@ export default function TasksIndex({
   const device = queryState.device;
   const repository = queryState.repo;
   const worktree = queryState.worktree;
+  const [deviceInput, setDeviceInput] = useState("");
+  const [repositoryInput, setRepositoryInput] = useState("");
+  const [worktreeInput, setWorktreeInput] = useState("");
   const [deviceOptions, setDeviceOptions] = useState(devices);
   const [repositoryOptions, setRepositoryOptions] = useState(repositories);
   const [worktreeOptions, setWorktreeOptions] = useState(worktrees);
@@ -509,7 +509,6 @@ export default function TasksIndex({
   const [lineage, setLineage] = useState<SessionLineage | null>(null);
   const [lineageError, setLineageError] = useState<string | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
-  const initialQuery = useRef(query);
   const filtered = useMemo(
     () =>
       filterLedger(
@@ -541,47 +540,39 @@ export default function TasksIndex({
   const nonCurrentTotal = filtered.nonCurrentTotal;
   const globalSearch = queryState.global ? "&global=true" : "";
 
-  useEffect(() => {
-    if (query === initialQuery.current) return;
-    let cancel: (() => void) | undefined;
-    router.reload({
-      onCancelToken: (token) => {
-        cancel = token.cancel;
-      },
-    });
-    return () => cancel?.();
-  }, [query]);
-
   const searchDevices = (value: string) => {
+    setDeviceInput(value);
     const request = ++deviceRequest.current;
     void fetch(`/api/select-options/devices?q=${encodeURIComponent(value)}${globalSearch}`)
       .then(async (response) => {
         if (!response.ok) return;
         const options = (await response.json()) as Device[];
         if (request !== deviceRequest.current) return;
-        startTransition(() => setDeviceOptions(options));
+        setDeviceOptions(options);
       })
       .catch(() => undefined);
   };
   const searchRepositories = (value: string) => {
+    setRepositoryInput(value);
     const request = ++repositoryRequest.current;
     void fetch(`/api/select-options/repositories?q=${encodeURIComponent(value)}${globalSearch}`)
       .then(async (response) => {
         if (!response.ok) return;
         const options = (await response.json()) as Repository[];
         if (request !== repositoryRequest.current) return;
-        startTransition(() => setRepositoryOptions(options));
+        setRepositoryOptions(options);
       })
       .catch(() => undefined);
   };
   const searchWorktrees = (value: string) => {
+    setWorktreeInput(value);
     const request = ++worktreeRequest.current;
     void fetch(`/api/select-options/worktrees?q=${encodeURIComponent(value)}${globalSearch}`)
       .then(async (response) => {
         if (!response.ok) return;
         const options = (await response.json()) as Worktree[];
         if (request !== worktreeRequest.current) return;
-        startTransition(() => setWorktreeOptions(options));
+        setWorktreeOptions(options);
       })
       .catch(() => undefined);
   };
@@ -791,7 +782,7 @@ export default function TasksIndex({
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
-              <Autocomplete filter={contains} onInputChange={searchDevices}>
+              <Autocomplete inputValue={deviceInput} onInputChange={searchDevices}>
                 <SelectPopover className="max-h-72">
                   <SelectInput aria-label="Search devices" placeholder="Search devices" />
                   <SelectList renderEmptyState={() => <SelectEmpty>No devices found.</SelectEmpty>}>
@@ -820,7 +811,7 @@ export default function TasksIndex({
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
-              <Autocomplete filter={contains} onInputChange={searchRepositories}>
+              <Autocomplete inputValue={repositoryInput} onInputChange={searchRepositories}>
                 <SelectPopover className="max-h-72">
                   <SelectInput aria-label="Search repositories" placeholder="Search repositories" />
                   <SelectList
@@ -858,7 +849,7 @@ export default function TasksIndex({
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
-              <Autocomplete filter={contains} onInputChange={searchWorktrees}>
+              <Autocomplete inputValue={worktreeInput} onInputChange={searchWorktrees}>
                 <SelectPopover className="max-h-72">
                   <SelectInput aria-label="Search worktrees" placeholder="Search worktrees" />
                   <SelectList
