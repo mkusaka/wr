@@ -512,6 +512,7 @@ export default function TasksIndex({
   const [lineageLoading, setLineageLoading] = useState(false);
   const initialQuery = useRef(query);
   const queryVisitCancel = useRef<(() => void) | undefined>(undefined);
+  const queryReloadTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filtered = useMemo(
     () =>
       filterLedger(
@@ -545,15 +546,28 @@ export default function TasksIndex({
 
   useEffect(() => {
     if (query === initialQuery.current) return;
-    void router.get(window.location.pathname + window.location.search, undefined, {
-      replace: true,
-      preserveState: true,
-      preserveScroll: true,
-      onCancelToken: (token) => {
-        queryVisitCancel.current = token.cancel;
-      },
-    });
-    return () => queryVisitCancel.current?.();
+    if (queryReloadTimeout.current) {
+      clearTimeout(queryReloadTimeout.current);
+    }
+    queryReloadTimeout.current = setTimeout(() => {
+      queryReloadTimeout.current = null;
+      void router.get(window.location.pathname + window.location.search, undefined, {
+        replace: true,
+        preserveState: true,
+        preserveScroll: true,
+        only: ["runs", "tasks", "pullRequests", "conversationLinks"],
+        onCancelToken: (token) => {
+          queryVisitCancel.current = token.cancel;
+        },
+      });
+    }, 300);
+    return () => {
+      if (queryReloadTimeout.current) {
+        clearTimeout(queryReloadTimeout.current);
+        queryReloadTimeout.current = null;
+      }
+      queryVisitCancel.current?.();
+    };
   }, [query]);
 
   const searchDevices = (value: string) => {

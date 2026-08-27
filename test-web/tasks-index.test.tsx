@@ -163,7 +163,7 @@ describe("TasksIndex", () => {
     });
 
     expect(screen.getByText("+ 1 non-current")).toBeTruthy();
-    await waitFor(() => expect(router.get).toHaveBeenCalled());
+    await waitFor(() => expect(router.get).toHaveBeenCalled(), { timeout: 2000 });
   });
 
   test("cancels a prior query reload before starting the next", async () => {
@@ -179,10 +179,10 @@ describe("TasksIndex", () => {
 
     const search = screen.getByRole("searchbox", { name: "Search" });
     fireEvent.change(search, { target: { value: "P" } });
-    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1), { timeout: 2000 });
     fireEvent.change(search, { target: { value: "Pa" } });
 
-    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(cancelFirstReload).toHaveBeenCalledOnce();
   });
 
@@ -196,7 +196,7 @@ describe("TasksIndex", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search" }), {
       target: { value: "P" },
     });
-    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(router.get).toHaveBeenCalledTimes(1), { timeout: 2000 });
     unmount();
 
     expect(cancelReload).toHaveBeenCalledOnce();
