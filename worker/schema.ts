@@ -26,17 +26,21 @@ export const users = sqliteTable("users", {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const devices = sqliteTable("devices", {
-  id: text().primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  name: text().notNull(),
-  ...timestamps,
-  lastSeenAt: text("last_seen_at")
-    .notNull()
-    .default(sql`CURRENT_TIMESTAMP`),
-});
+export const devices = sqliteTable(
+  "devices",
+  {
+    id: text().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    name: text().notNull(),
+    ...timestamps,
+    lastSeenAt: text("last_seen_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("devices_user_idx").on(table.userId)],
+);
 
 export const tasks = sqliteTable(
   "tasks",
@@ -151,7 +155,10 @@ export const sessionRunCheckouts = sqliteTable(
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [primaryKey({ columns: [table.deviceId, table.sessionRunId, table.checkoutId] })],
+  (table) => [
+    primaryKey({ columns: [table.deviceId, table.sessionRunId, table.checkoutId] }),
+    index("session_run_checkouts_session_run_idx").on(table.sessionRunId, table.checkoutId, table.deviceId),
+  ],
 );
 
 export const executions = sqliteTable(
@@ -179,6 +186,8 @@ export const executions = sqliteTable(
   },
   (table) => [
     index("executions_device_status_idx").on(table.deviceId, table.status),
+    index("executions_task_idx").on(table.taskId, table.deviceId, table.checkoutId),
+    index("executions_cli_session_idx").on(table.cliSessionId, table.taskId, table.deviceId),
     check("executions_status_check", sql`${table.status} IN ('active','finished','abandoned')`),
   ],
 );
@@ -241,6 +250,7 @@ export const sessionRunPullRequests = sqliteTable(
     primaryKey({
       columns: [table.deviceId, table.sessionRunId, table.checkoutId, table.pullRequestId],
     }),
+    index("session_run_pull_requests_pull_request_idx").on(table.pullRequestId, table.checkoutId, table.deviceId),
   ],
 );
 
@@ -265,6 +275,7 @@ export const workpadLinks = sqliteTable(
       table.checkoutId,
       table.ref,
     ),
+    index("workpad_links_task_idx").on(table.taskId, table.deviceId, table.checkoutId),
   ],
 );
 
