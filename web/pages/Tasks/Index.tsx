@@ -1337,7 +1337,7 @@ export default function TasksIndex({
                           {relationships.data.tasks.length > 0 ? (
                             <section>
                               <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
-                                Tasks {relationships.data.tasks.length}
+                                Assigned tasks {relationships.data.tasks.length}
                               </h4>
                               <div className="flex flex-wrap gap-2">
                                 {relationships.data.tasks.map((task) => (
@@ -1351,63 +1351,79 @@ export default function TasksIndex({
                               </div>
                             </section>
                           ) : null}
-                          {relationships.data.runs.length > 0 ? (
+                          {relationships.data.runs.length > 0 ||
+                          relationships.data.checkouts.length > 0 ? (
                             <section>
-                              <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
-                                Session runs {relationships.data.runs.length}
+                              <h4 className="text-xs font-medium text-muted-foreground uppercase">
+                                Registration context
                               </h4>
-                              <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                                {relationships.data.runs.map((run) => (
-                                  <div
-                                    key={run.id}
-                                    className="rounded-lg border bg-muted/30 p-3 text-xs"
-                                  >
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="font-mono">
-                                        {run.cli}:{run.externalSessionId}
-                                      </span>
-                                      <Badge variant="outline">
-                                        {run.endedAt ? "ended" : "active"}
-                                      </Badge>
-                                    </div>
-                                    <p className="mt-2 text-muted-foreground">
-                                      {run.terminalId || "No terminal"} · {run.startedAt}
-                                    </p>
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                      <CopyCommand
-                                        command={resumeCommand(run.cli, run.externalSessionId)}
-                                      />
-                                      <CopyCommand command={`wr run focus ${run.id}`} />
-                                      {run.terminalId ? (
-                                        <CopyCommand
-                                          command={`wr terminal focus ${run.terminalId}`}
-                                        />
-                                      ) : null}
-                                    </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Captured when this PR was registered; it does not assign the PR to a
+                                task.
+                              </p>
+                              {relationships.data.runs.length > 0 ? (
+                                <div className="mt-3">
+                                  <h5 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                                    Session runs {relationships.data.runs.length}
+                                  </h5>
+                                  <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
+                                    {relationships.data.runs.map((run) => (
+                                      <div
+                                        key={run.id}
+                                        className="rounded-lg border bg-muted/30 p-3 text-xs"
+                                      >
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <span className="font-mono">
+                                            {run.cli}:{run.externalSessionId}
+                                          </span>
+                                          <Badge variant="outline">
+                                            {run.endedAt ? "ended" : "active"}
+                                          </Badge>
+                                        </div>
+                                        <p className="mt-2 text-muted-foreground">
+                                          {run.terminalId || "No terminal"} · {run.startedAt}
+                                        </p>
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                          <CopyCommand
+                                            command={resumeCommand(run.cli, run.externalSessionId)}
+                                          />
+                                          <CopyCommand command={`wr run focus ${run.id}`} />
+                                          {run.terminalId ? (
+                                            <CopyCommand
+                                              command={`wr terminal focus ${run.terminalId}`}
+                                            />
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    ))}
                                   </div>
-                                ))}
-                              </div>
-                            </section>
-                          ) : null}
-                          {relationships.data.checkouts.length > 0 ? (
-                            <section>
-                              <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
-                                Checkouts {relationships.data.checkouts.length}
-                              </h4>
-                              <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                                {relationships.data.checkouts.map((checkout) => (
-                                  <div
-                                    key={checkout.id}
-                                    className="rounded-lg border bg-muted/30 p-3 text-xs"
-                                  >
-                                    <p className="break-all font-mono">{checkout.worktreePath}</p>
-                                    <p className="mt-1 break-all text-muted-foreground">
-                                      {checkout.repoRoot}
-                                      {checkout.branch ? ` · ${checkout.branch}` : ""}
-                                    </p>
+                                </div>
+                              ) : null}
+                              {relationships.data.checkouts.length > 0 ? (
+                                <div
+                                  className={relationships.data.runs.length > 0 ? "mt-5" : "mt-3"}
+                                >
+                                  <h5 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
+                                    Checkouts {relationships.data.checkouts.length}
+                                  </h5>
+                                  <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
+                                    {relationships.data.checkouts.map((checkout) => (
+                                      <div
+                                        key={checkout.id}
+                                        className="rounded-lg border bg-muted/30 p-3 text-xs"
+                                      >
+                                        <p className="break-all font-mono">
+                                          {checkout.worktreePath}
+                                        </p>
+                                        <p className="mt-1 break-all text-muted-foreground">
+                                          {checkout.repoRoot}
+                                          {checkout.branch ? ` · ${checkout.branch}` : ""}
+                                        </p>
+                                      </div>
+                                    ))}
                                   </div>
-                                ))}
-                              </div>
+                                </div>
+                              ) : null}
                             </section>
                           ) : null}
                           {relationships.data.parentPullRequest ||

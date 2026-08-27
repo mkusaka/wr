@@ -368,7 +368,7 @@ describe("TasksIndex", () => {
     expect(screen.queryByRole("option", { name: "Cancelled" })).toBeNull();
   });
 
-  test("expands a pull request and copies resume and focus commands", async () => {
+  test("labels task assignment separately from registration context", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -381,7 +381,7 @@ describe("TasksIndex", () => {
           JSON.stringify({
             parentPullRequest: null,
             childPullRequests: [],
-            tasks: [],
+            tasks: [{ issueId: "MOQ-100", title: "Patient search", status: "active" }],
             runs: [
               {
                 id: "run-42",
@@ -408,7 +408,14 @@ describe("TasksIndex", () => {
                 endedAt: null,
               },
             ],
-            checkouts: [],
+            checkouts: [
+              {
+                id: "checkout-42",
+                repoRoot: "/src/example/wr",
+                worktreePath: "/src/example/wr/worktrees/patient",
+                branch: "feature/patient-search",
+              },
+            ],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -433,6 +440,15 @@ describe("TasksIndex", () => {
     const codexResume = screen.getByRole("button", { name: "codex resume session-codex" });
     const devinResume = screen.getByRole("button", { name: "devin --resume session-devin" });
     const focus = screen.getByRole("button", { name: "wr run focus run-42" });
+    expect(screen.getByText("Assigned tasks 1")).toBeTruthy();
+    expect(screen.getByText("Registration context")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Captured when this PR was registered; it does not assign the PR to a task.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Session runs 3")).toBeTruthy();
+    expect(screen.getByText("Checkouts 1")).toBeTruthy();
     fireEvent.click(resume);
     fireEvent.click(codexResume);
     fireEvent.click(devinResume);
