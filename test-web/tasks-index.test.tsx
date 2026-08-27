@@ -143,7 +143,7 @@ describe("TasksIndex", () => {
       runs: [{ ...pageProps.runs[0]!, cli: "pi", externalSessionId: "pi-session" }],
     });
 
-    expect(screen.getByText("pi --resume pi-session")).toBeTruthy();
+    expect(screen.getByText("omp --resume pi-session")).toBeTruthy();
   });
 
   test("shows non-current count below current results", () => {
