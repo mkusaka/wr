@@ -215,7 +215,7 @@ function resumeCommand(cli: Run["cli"], externalSessionId: string): string {
     case "devin":
       return `devin --resume ${externalSessionId}`;
     case "pi":
-      return `pi --session ${externalSessionId}`;
+      return `pi --resume ${externalSessionId}`;
     case "claude":
       return `claude --resume ${externalSessionId}`;
   }
