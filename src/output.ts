@@ -5,6 +5,69 @@ function terminalText(value: unknown): string {
   return String(value ?? "-").replace(/\p{Cc}/gu, " ");
 }
 
+type RunTreeNode = {
+  row: Record<string, unknown>;
+  children: RunTreeNode[];
+  index: number;
+};
+
+function runsWithParent(rows: Record<string, unknown>[]): RunTreeNode[] {
+  const byId = new Map<string, RunTreeNode>();
+  const bySession = new Map<string, RunTreeNode[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const node: RunTreeNode = { row, children: [], index: i };
+    byId.set(String(row.id), node);
+    const sessionId = String(row.sessionId ?? row.id);
+    bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), node]);
+  }
+  const roots: RunTreeNode[] = [];
+  for (const row of rows) {
+    const id = String(row.id);
+    const parentSessionId = row.parentCliSessionId ? String(row.parentCliSessionId) : null;
+    const node = byId.get(id)!;
+    if (parentSessionId) {
+      const candidates = (bySession.get(parentSessionId) ?? []).filter(
+        (n) =>
+          String(n.row.id) !== id && String(n.row.startedAt ?? "") <= String(row.startedAt ?? ""),
+      );
+      if (candidates.length > 0) {
+        const parent = candidates.reduce((best, current) =>
+          String(current.row.startedAt ?? "") > String(best.row.startedAt ?? "") ? current : best,
+        );
+        parent.children.push(node);
+        continue;
+      }
+    }
+    roots.push(node);
+  }
+  return roots.toSorted((a, b) => a.index - b.index);
+}
+
+function appendRunChildren(
+  lines: string[],
+  children: RunTreeNode[],
+  prefix: string,
+  fields: string[],
+): void {
+  for (const [index, node] of children.entries()) {
+    const last = index === children.length - 1;
+    const line = `${prefix}${last ? "└─" : "├─"} ${fields
+      .map((field) => `${field}=${terminalText(node.row[field])}`)
+      .join(" ")}`;
+    lines.push(line);
+    appendRunChildren(lines, node.children, `${prefix}${last ? "   " : "│  "}`, fields);
+  }
+}
+
+function renderRunTree(rows: Record<string, unknown>[]): string {
+  const fields = DEFAULT_FIELDS.runs;
+  const tree = runsWithParent(rows);
+  const lines: string[] = [];
+  appendRunChildren(lines, tree, "", fields);
+  return lines.join("\n");
+}
+
 function projectRows(
   resource: ResourceName,
   rows: Array<Record<string, unknown>>,
@@ -47,6 +110,8 @@ export function renderResource(
         })
         .filter((group) => group !== null)
         .join("\n\n");
+    } else if (resource === "runs") {
+      body = renderRunTree(rows);
     } else {
       body = projectRows(resource, rows, DEFAULT_FIELDS[resource])
         .map((row) =>

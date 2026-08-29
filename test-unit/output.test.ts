@@ -41,6 +41,78 @@ describe("resource output", () => {
     expect(output).toContain("+ 3 non-current");
   });
 
+  test("renders run list as a parent-child tree", () => {
+    const output = renderResource("runs", [
+      {
+        id: "run-1",
+        sessionId: "session-a",
+        parentCliSessionId: null,
+        session: "codex:parent",
+        status: "active",
+        deviceName: "Work laptop",
+        itermSessionId: "term-1",
+        lastSeenAt: "2026-08-15 12:00:00",
+        startedAt: "2026-08-15 11:00:00",
+      },
+      {
+        id: "run-2",
+        sessionId: "session-b",
+        parentCliSessionId: "session-a",
+        session: "claude:child",
+        status: "active",
+        deviceName: "Work laptop",
+        itermSessionId: "term-2",
+        lastSeenAt: "2026-08-15 12:01:00",
+        startedAt: "2026-08-15 11:30:00",
+      },
+    ]);
+    expect(output).toContain("id=run-1");
+    expect(output).toContain("└─");
+    expect(output).toContain("id=run-2");
+  });
+
+  test("links a child run to the latest parent run by session and startedAt", () => {
+    const output = renderResource("runs", [
+      {
+        id: "run-1",
+        sessionId: "session-a",
+        parentCliSessionId: null,
+        session: "codex:parent-1",
+        status: "active",
+        deviceName: "Work laptop",
+        itermSessionId: "term-1",
+        lastSeenAt: "2026-08-15 12:00:00",
+        startedAt: "2026-08-15 10:00:00",
+      },
+      {
+        id: "run-2",
+        sessionId: "session-a",
+        parentCliSessionId: null,
+        session: "codex:parent-2",
+        status: "active",
+        deviceName: "Work laptop",
+        itermSessionId: "term-2",
+        lastSeenAt: "2026-08-15 12:01:00",
+        startedAt: "2026-08-15 11:00:00",
+      },
+      {
+        id: "run-3",
+        sessionId: "session-b",
+        parentCliSessionId: "session-a",
+        session: "claude:child",
+        status: "active",
+        deviceName: "Work laptop",
+        itermSessionId: "term-3",
+        lastSeenAt: "2026-08-15 12:02:00",
+        startedAt: "2026-08-15 11:30:00",
+      },
+    ]);
+    expect(output).toContain("id=run-2");
+    expect(output).toContain("└─");
+    expect(output).toContain("id=run-3");
+    expect(output.indexOf("id=run-2")).toBeLessThan(output.indexOf("id=run-3"));
+  });
+
   test("ignores non-current count in JSON output", () => {
     const output = renderResource(
       "tasks",

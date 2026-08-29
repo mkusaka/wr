@@ -26,6 +26,7 @@ export const RESOURCE_FIELDS: Record<ResourceName, string[]> = {
   runs: [
     "id",
     "sessionId",
+    "parentCliSessionId",
     "session",
     "itermSessionId",
     "startedCwd",

@@ -28,6 +28,7 @@ const runs: Run[] = [
   {
     id: "run-a",
     cliSessionId: "session-a",
+    parentCliSessionId: null,
     cli: "codex",
     externalSessionId: "session-a",
     terminalId: "terminal-a",
@@ -385,6 +386,8 @@ describe("TasksIndex", () => {
             runs: [
               {
                 id: "run-42",
+                cliSessionId: "session-42",
+                parentCliSessionId: null,
                 cli: "claude",
                 externalSessionId: "session-42",
                 terminalId: "terminal-42",
@@ -393,6 +396,8 @@ describe("TasksIndex", () => {
               },
               {
                 id: "run-codex",
+                cliSessionId: "session-codex",
+                parentCliSessionId: null,
                 cli: "codex",
                 externalSessionId: "session-codex",
                 terminalId: "terminal-codex",
@@ -401,6 +406,8 @@ describe("TasksIndex", () => {
               },
               {
                 id: "run-devin",
+                cliSessionId: "session-devin",
+                parentCliSessionId: null,
                 cli: "devin",
                 externalSessionId: "session-devin",
                 terminalId: "terminal-devin",

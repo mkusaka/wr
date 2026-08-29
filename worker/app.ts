@@ -1298,6 +1298,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const userId = c.get("userId");
     const db = drizzle(c.env.DB, { schema });
     const parentPullRequests = alias(schema.pullRequests, "relationship_parent_pull_requests");
+    const parentCliSessions = alias(schema.cliSessions, "relationship_parent_cli_sessions");
     const pullRequest = await db
       .select({
         id: schema.pullRequests.id,
@@ -1344,6 +1345,8 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       runs: await db
         .selectDistinct({
           id: schema.sessionRuns.id,
+          cliSessionId: schema.sessionRuns.cliSessionId,
+          parentCliSessionId: parentCliSessions.id,
           cli: schema.cliSessions.cli,
           externalSessionId: schema.cliSessions.externalSessionId,
           terminalId: schema.sessionRuns.terminalId,
@@ -1356,6 +1359,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
           eq(schema.sessionRuns.id, schema.sessionRunPullRequests.sessionRunId),
         )
         .innerJoin(schema.cliSessions, eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId))
+        .leftJoin(
+          parentCliSessions,
+          eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId),
+        )
         .where(
           and(
             eq(schema.sessionRunPullRequests.pullRequestId, pullRequest.id),
@@ -1438,6 +1445,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         );
       case "runs":
       case "terminals":
+        const parentCliSessions = alias(schema.cliSessions, "resources_parent_cli_sessions");
         return c.json(
           decodeLocations(
             await db
@@ -1445,6 +1453,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 id: schema.sessionRuns.id,
                 runId: schema.sessionRuns.id,
                 sessionId: schema.sessionRuns.cliSessionId,
+                parentCliSessionId: parentCliSessions.id,
                 session: sql<string>`${schema.cliSessions.cli} || ':' || ${schema.cliSessions.externalSessionId}`,
                 itermSessionId: schema.sessionRuns.terminalId,
                 startedCwd: schema.sessionRuns.startedCwd,
@@ -1472,6 +1481,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               .innerJoin(
                 schema.cliSessions,
                 eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId),
+              )
+              .leftJoin(
+                parentCliSessions,
+                eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId),
               )
               .innerJoin(schema.devices, eq(schema.devices.id, schema.sessionRuns.deviceId))
               .where(
@@ -1715,6 +1728,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     if (issue && taskRows.length === 0)
       throw new HTTPException(404, { message: `Task not found: ${issue}` });
     const parentPullRequests = alias(schema.pullRequests, "show_parent_pull_requests");
+    const parentCliSessions = alias(schema.cliSessions, "show_parent_cli_sessions");
     return c.json(
       await Promise.all(
         taskRows.map(async (task) => ({
@@ -1727,16 +1741,23 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
               id: schema.executions.id,
               status: schema.executions.status,
               sessionRunId: schema.executions.sessionRunId,
+              cliSessionId: schema.executions.cliSessionId,
+              parentCliSessionId: parentCliSessions.id,
               cli: schema.cliSessions.cli,
               externalSessionId: schema.cliSessions.externalSessionId,
               deviceName: schema.devices.name,
               worktreePath: schema.checkouts.worktreePath,
               branch: schema.checkouts.branch,
+              startedAt: schema.executions.startedAt,
             })
             .from(schema.executions)
             .innerJoin(
               schema.cliSessions,
               eq(schema.cliSessions.id, schema.executions.cliSessionId),
+            )
+            .leftJoin(
+              parentCliSessions,
+              eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId),
             )
             .innerJoin(schema.devices, eq(schema.devices.id, schema.executions.deviceId))
             .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.executions.checkoutId))
@@ -1756,6 +1777,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
                 headBranch: schema.pullRequests.headBranch,
                 baseBranch: schema.pullRequests.baseBranch,
                 state: schema.pullRequests.state,
+                parentRepo: parentPullRequests.repo,
                 parentNumber: parentPullRequests.number,
                 deviceNames: pullRequestDeviceNames(userId),
               })
@@ -1777,6 +1799,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
             headBranch: pullRequest.headBranch,
             baseBranch: pullRequest.baseBranch,
             state: pullRequest.state,
+            parentRepo: pullRequest.parentRepo,
             parentNumber: pullRequest.parentNumber,
             deviceNames: JSON.parse(pullRequest.deviceNames),
           })),
@@ -1851,6 +1874,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
       .where(deviceScope(schema.conversationLinks.deviceId, userId))
       .orderBy(desc(schema.conversationLinks.createdAt));
+    const parentCliSessions = alias(schema.cliSessions, "index_parent_cli_sessions");
     const runRows = await db
       .select({
         id: schema.sessionRuns.id,
@@ -1863,6 +1887,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         startedAt: schema.sessionRuns.startedAt,
         updatedAt: schema.sessionRuns.lastSeenAt,
         endedAt: schema.sessionRuns.endedAt,
+        parentCliSessionId: parentCliSessions.id,
         deviceId: schema.sessionRuns.deviceId,
         deviceName: schema.devices.name,
         repoRoots: sql<string>`coalesce((select json_group_array(repo_root) from (
@@ -1882,6 +1907,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       })
       .from(schema.sessionRuns)
       .innerJoin(schema.cliSessions, eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId))
+      .leftJoin(parentCliSessions, eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId))
       .innerJoin(schema.devices, eq(schema.devices.id, schema.sessionRuns.deviceId))
       .where(deviceScope(schema.sessionRuns.deviceId, userId))
       .orderBy(desc(schema.sessionRuns.lastSeenAt));
@@ -1976,6 +2002,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       runs: runRows.map((run) => ({
         id: run.id,
         cliSessionId: run.cliSessionId,
+        parentCliSessionId: run.parentCliSessionId,
         cli: run.cli,
         externalSessionId: run.externalSessionId,
         terminalId: run.terminalId,

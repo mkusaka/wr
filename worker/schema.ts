@@ -157,7 +157,11 @@ export const sessionRunCheckouts = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.deviceId, table.sessionRunId, table.checkoutId] }),
-    index("session_run_checkouts_session_run_idx").on(table.sessionRunId, table.checkoutId, table.deviceId),
+    index("session_run_checkouts_session_run_idx").on(
+      table.sessionRunId,
+      table.checkoutId,
+      table.deviceId,
+    ),
   ],
 );
 
@@ -250,7 +254,11 @@ export const sessionRunPullRequests = sqliteTable(
     primaryKey({
       columns: [table.deviceId, table.sessionRunId, table.checkoutId, table.pullRequestId],
     }),
-    index("session_run_pull_requests_pull_request_idx").on(table.pullRequestId, table.checkoutId, table.deviceId),
+    index("session_run_pull_requests_pull_request_idx").on(
+      table.pullRequestId,
+      table.checkoutId,
+      table.deviceId,
+    ),
   ],
 );
 

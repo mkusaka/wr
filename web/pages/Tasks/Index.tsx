@@ -56,6 +56,7 @@ export type Task = {
 export type Run = {
   id: string;
   cliSessionId: string;
+  parentCliSessionId: string | null;
   cli: "codex" | "claude" | "devin" | "pi";
   externalSessionId: string;
   terminalId: string | null;
@@ -161,10 +162,13 @@ type TaskRelationships = {
     id: string;
     status: "active" | "finished" | "abandoned";
     sessionRunId: string | null;
+    cliSessionId: string;
+    parentCliSessionId: string | null;
     cli: "codex" | "claude" | "devin" | "pi";
     externalSessionId: string;
     worktreePath: string | null;
     branch: string | null;
+    startedAt: string;
   }>;
   pullRequests: Array<{
     repo: string;
@@ -173,6 +177,7 @@ type TaskRelationships = {
     headBranch: string;
     baseBranch: string;
     state: PullRequest["state"];
+    parentRepo: string | null;
     parentNumber: number | null;
   }>;
   links: Array<{ kind: string; ref: string }>;
@@ -189,6 +194,8 @@ type PullRequestRelationships = {
   tasks: Array<{ issueId: string; title: string | null; status: Task["status"] }>;
   runs: Array<{
     id: string;
+    cliSessionId: string;
+    parentCliSessionId: string | null;
     cli: "codex" | "claude" | "devin" | "pi";
     externalSessionId: string;
     terminalId: string | null;
@@ -468,6 +475,109 @@ function SessionLineagePanel({
       </div>
     </section>
   );
+}
+
+type TreeNode<T> = { item: T; children: TreeNode<T>[]; index: number };
+
+type WithParent<T> = T & { parentId: string | null };
+
+type RunTreeItem = {
+  id: string;
+  cliSessionId: string;
+  parentCliSessionId: string | null;
+  startedAt: string;
+};
+
+type PullRequestTreeItem = {
+  repo: string;
+  number: number;
+  parentRepo: string | null;
+  parentNumber: number | null;
+};
+
+function buildTree<T>(items: WithParent<T>[], getId: (item: T) => string): TreeNode<T>[] {
+  const nodes = new Map<string, TreeNode<T>>();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const id = getId(item);
+    nodes.set(id, { item, children: [], index: i });
+  }
+  const roots: TreeNode<T>[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const id = getId(item);
+    const parentId = item.parentId;
+    const node = nodes.get(id)!;
+    if (parentId && parentId !== id && nodes.has(parentId)) {
+      nodes.get(parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots.toSorted((a, b) => a.index - b.index);
+}
+
+function Tree<T>({
+  nodes,
+  getKey,
+  render,
+  depth = 0,
+}: {
+  nodes: TreeNode<T>[];
+  getKey: (item: T) => string;
+  render: (item: T, depth: number) => React.ReactNode;
+  depth?: number;
+}) {
+  // ponytail: tree rendering is capped at 16 levels; add cycle detection if untrusted writers arrive.
+  if (depth >= 16) return null;
+  return nodes.map((node, index) => {
+    const last = index === nodes.length - 1;
+    return (
+      <div key={getKey(node.item)} className="grid gap-1">
+        <div className="flex items-start gap-2" style={{ paddingLeft: `${depth * 0.75}rem` }}>
+          {depth > 0 ? (
+            <span className="font-mono text-xs text-muted-foreground" aria-hidden="true">
+              {last ? "└─" : "├─"}
+            </span>
+          ) : null}
+          <div className="min-w-0 flex-1">{render(node.item, depth)}</div>
+        </div>
+        <Tree nodes={node.children} getKey={getKey} render={render} depth={depth + 1} />
+      </div>
+    );
+  });
+}
+
+function runParentId<T extends RunTreeItem>(items: T[], item: T): string | null {
+  if (!item.parentCliSessionId) return null;
+  const candidates = items.filter(
+    (i) =>
+      i.id !== item.id &&
+      i.cliSessionId === item.parentCliSessionId &&
+      i.startedAt <= item.startedAt,
+  );
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, current) => (current.startedAt > best.startedAt ? current : best))
+    .id;
+}
+
+export function runsWithParent<T extends RunTreeItem>(items: T[]): WithParent<T>[] {
+  return items.map((item) => ({ ...item, parentId: runParentId(items, item) }));
+}
+
+export function pullRequestKey(pr: PullRequestTreeItem): string {
+  return `${pr.repo}#${pr.number}`;
+}
+
+function pullRequestParentId<T extends PullRequestTreeItem>(items: T[], item: T): string | null {
+  if (!item.parentNumber) return null;
+  const parentRepo = item.parentRepo ?? item.repo;
+  const parent = items.find((i) => i.repo === parentRepo && i.number === item.parentNumber);
+  return parent ? `${parentRepo}#${item.parentNumber}` : null;
+}
+
+export function pullRequestsWithParent<T extends PullRequestTreeItem>(items: T[]): WithParent<T>[] {
+  return items.map((item) => ({ ...item, parentId: pullRequestParentId(items, item) }));
 }
 
 export default function TasksIndex({
@@ -924,128 +1034,133 @@ export default function TasksIndex({
               </span>
             </h2>
             <div className="grid gap-3">
-              {filtered.runs.map((run) => (
-                <Card
-                  key={run.id}
-                  size="sm"
-                  className={
-                    selected?.kind === "run" && selected.key === run.id
-                      ? "border-primary/40 ring-2 ring-primary/10"
-                      : undefined
-                  }
-                >
-                  <button
-                    type="button"
-                    className="w-full text-left"
-                    aria-expanded={selected?.kind === "run" && selected.key === run.id}
-                    onClick={() =>
-                      setSelected(
-                        selected?.kind === "run" && selected.key === run.id
-                          ? null
-                          : {
-                              kind: "run",
-                              key: run.id,
-                              id: run.id,
-                              cliSessionId: run.cliSessionId,
-                            },
-                      )
+              <Tree
+                nodes={buildTree(runsWithParent(filtered.runs), (run) => run.id)}
+                getKey={(run) => run.id}
+                render={(run) => (
+                  <Card
+                    size="sm"
+                    className={
+                      selected?.kind === "run" && selected.key === run.id
+                        ? "border-primary/40 ring-2 ring-primary/10"
+                        : undefined
                     }
                   >
-                    <CardHeader>
-                      <CardTitle className="break-all font-mono text-sm">
-                        {run.cli}:{run.externalSessionId}
-                      </CardTitle>
-                      <CardDescription className="break-all font-mono text-xs">
-                        {run.startedCwd || run.id}
-                        {run.source ? ` · ${run.source}` : ""}
-                      </CardDescription>
-                      <CardAction className="flex items-center gap-2">
-                        <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
-                        {selected?.kind === "run" && selected.key === run.id ? (
-                          <ChevronDownIcon className="size-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronRightIcon className="size-4 text-muted-foreground" />
-                        )}
-                      </CardAction>
-                    </CardHeader>
-                    <CardContent className="grid gap-3 text-xs text-muted-foreground">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <code className="break-all">{run.id}</code>
-                        <time dateTime={run.updatedAt}>
-                          {new Date(`${run.updatedAt}Z`).toLocaleString("en-US")}
-                        </time>
-                      </div>
-                    </CardContent>
-                  </button>
-                  <CardContent className="grid gap-3 text-xs text-muted-foreground">
-                    <div className="flex flex-wrap gap-2">
-                      <CopyCommand command={resumeCommand(run.cli, run.externalSessionId)} />
-                      {run.terminalId ? <CopyCommand command={`wr run focus ${run.id}`} /> : null}
-                    </div>
-                    {filtered.conversationLinks.filter(
-                      (conversation) => conversation.cliSessionId === run.cliSessionId,
-                    ).length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {filtered.conversationLinks
-                          .filter((conversation) => conversation.cliSessionId === run.cliSessionId)
-                          .map((conversation) => (
-                            <a
-                              key={conversation.id}
-                              className="max-w-full truncate rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
-                              href={conversation.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={conversation.url}
-                            >
-                              {conversation.url}
-                            </a>
-                          ))}
-                      </div>
-                    ) : null}
-                  </CardContent>
-                  {selected?.kind === "run" && selected.key === run.id ? (
-                    <CardContent className="grid gap-4 border-t pt-4" aria-live="polite">
-                      {lineageLoading ? (
-                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <LoaderCircleIcon className="size-4 animate-spin" />
-                          Loading lineage
-                        </p>
-                      ) : lineageError ? (
-                        <p className="text-sm text-destructive">{lineageError}</p>
-                      ) : lineage ? (
-                        <SessionLineagePanel
-                          lineage={lineage}
-                          selectedSessionId={selected.cliSessionId}
-                        />
-                      ) : null}
-                      {relationshipsLoading ? (
-                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <LoaderCircleIcon className="size-4 animate-spin" />
-                          Loading related tasks
-                        </p>
-                      ) : relationshipError ? (
-                        <p className="text-sm text-destructive">{relationshipError}</p>
-                      ) : relationships?.kind === "run" && relationships.data.length > 0 ? (
-                        <div className="flex flex-wrap gap-2">
-                          <span className="text-xs font-medium text-muted-foreground uppercase">
-                            Tasks
-                          </span>
-                          {relationships.data.map((task) => (
-                            <span
-                              key={task.linearIssueId}
-                              className="rounded-md border px-2.5 py-1.5 text-xs"
-                            >
-                              {task.linearIssueId} · {task.status}
-                            </span>
-                          ))}
+                    <button
+                      type="button"
+                      className="w-full text-left"
+                      aria-expanded={selected?.kind === "run" && selected.key === run.id}
+                      onClick={() =>
+                        setSelected(
+                          selected?.kind === "run" && selected.key === run.id
+                            ? null
+                            : {
+                                kind: "run",
+                                key: run.id,
+                                id: run.id,
+                                cliSessionId: run.cliSessionId,
+                              },
+                        )
+                      }
+                    >
+                      <CardHeader>
+                        <CardTitle className="break-all font-mono text-sm">
+                          {run.cli}:{run.externalSessionId}
+                        </CardTitle>
+                        <CardDescription className="break-all font-mono text-xs">
+                          {run.startedCwd || run.id}
+                          {run.source ? ` · ${run.source}` : ""}
+                        </CardDescription>
+                        <CardAction className="flex items-center gap-2">
+                          <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+                          {selected?.kind === "run" && selected.key === run.id ? (
+                            <ChevronDownIcon className="size-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronRightIcon className="size-4 text-muted-foreground" />
+                          )}
+                        </CardAction>
+                      </CardHeader>
+                      <CardContent className="grid gap-3 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <code className="break-all">{run.id}</code>
+                          <time dateTime={run.updatedAt}>
+                            {new Date(`${run.updatedAt}Z`).toLocaleString("en-US")}
+                          </time>
                         </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No related tasks.</p>
-                      )}
+                      </CardContent>
+                    </button>
+                    <CardContent className="grid gap-3 text-xs text-muted-foreground">
+                      <div className="flex flex-wrap gap-2">
+                        <CopyCommand command={resumeCommand(run.cli, run.externalSessionId)} />
+                        {run.terminalId ? <CopyCommand command={`wr run focus ${run.id}`} /> : null}
+                      </div>
+                      {filtered.conversationLinks.filter(
+                        (conversation) => conversation.cliSessionId === run.cliSessionId,
+                      ).length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {filtered.conversationLinks
+                            .filter(
+                              (conversation) => conversation.cliSessionId === run.cliSessionId,
+                            )
+                            .map((conversation) => (
+                              <a
+                                key={conversation.id}
+                                className="max-w-full truncate rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
+                                href={conversation.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={conversation.url}
+                              >
+                                {conversation.url}
+                              </a>
+                            ))}
+                        </div>
+                      ) : null}
                     </CardContent>
-                  ) : null}
-                </Card>
-              ))}
+                    {selected?.kind === "run" && selected.key === run.id ? (
+                      <CardContent className="grid gap-4 border-t pt-4" aria-live="polite">
+                        {lineageLoading ? (
+                          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <LoaderCircleIcon className="size-4 animate-spin" />
+                            Loading lineage
+                          </p>
+                        ) : lineageError ? (
+                          <p className="text-sm text-destructive">{lineageError}</p>
+                        ) : lineage ? (
+                          <SessionLineagePanel
+                            lineage={lineage}
+                            selectedSessionId={selected.cliSessionId}
+                          />
+                        ) : null}
+                        {relationshipsLoading ? (
+                          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <LoaderCircleIcon className="size-4 animate-spin" />
+                            Loading related tasks
+                          </p>
+                        ) : relationshipError ? (
+                          <p className="text-sm text-destructive">{relationshipError}</p>
+                        ) : relationships?.kind === "run" && relationships.data.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            <span className="text-xs font-medium text-muted-foreground uppercase">
+                              Tasks
+                            </span>
+                            {relationships.data.map((task) => (
+                              <span
+                                key={task.linearIssueId}
+                                className="rounded-md border px-2.5 py-1.5 text-xs"
+                              >
+                                {task.linearIssueId} · {task.status}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">No related tasks.</p>
+                        )}
+                      </CardContent>
+                    ) : null}
+                  </Card>
+                )}
+              />
             </div>
           </section>
         ) : null}
@@ -1118,38 +1233,42 @@ export default function TasksIndex({
                                 Executions {relationships.data.executions.length}
                               </h4>
                               <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                                {relationships.data.executions.map((execution) => (
-                                  <div
-                                    key={execution.id}
-                                    className="rounded-lg border bg-muted/30 p-3 text-xs"
-                                  >
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="font-mono">
-                                        {execution.cli}:{execution.externalSessionId}
-                                      </span>
-                                      <Badge variant="outline">{execution.status}</Badge>
-                                    </div>
-                                    {execution.worktreePath ? (
-                                      <p className="mt-2 break-all text-muted-foreground">
-                                        {execution.worktreePath}
-                                        {execution.branch ? ` · ${execution.branch}` : ""}
-                                      </p>
-                                    ) : null}
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                      <CopyCommand
-                                        command={resumeCommand(
-                                          execution.cli,
-                                          execution.externalSessionId,
-                                        )}
-                                      />
-                                      {execution.sessionRunId ? (
-                                        <CopyCommand
-                                          command={`wr run focus ${execution.sessionRunId}`}
-                                        />
+                                <Tree
+                                  nodes={buildTree(
+                                    runsWithParent(relationships.data.executions),
+                                    (execution) => execution.id,
+                                  )}
+                                  getKey={(execution) => execution.id}
+                                  render={(execution) => (
+                                    <div className="rounded-lg border bg-muted/30 p-3 text-xs">
+                                      <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <span className="font-mono">
+                                          {execution.cli}:{execution.externalSessionId}
+                                        </span>
+                                        <Badge variant="outline">{execution.status}</Badge>
+                                      </div>
+                                      {execution.worktreePath ? (
+                                        <p className="mt-2 break-all text-muted-foreground">
+                                          {execution.worktreePath}
+                                          {execution.branch ? ` · ${execution.branch}` : ""}
+                                        </p>
                                       ) : null}
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <CopyCommand
+                                          command={resumeCommand(
+                                            execution.cli,
+                                            execution.externalSessionId,
+                                          )}
+                                        />
+                                        {execution.sessionRunId ? (
+                                          <CopyCommand
+                                            command={`wr run focus ${execution.sessionRunId}`}
+                                          />
+                                        ) : null}
+                                      </div>
                                     </div>
-                                  </div>
-                                ))}
+                                  )}
+                                />
                               </div>
                             </section>
                           ) : null}
@@ -1158,18 +1277,24 @@ export default function TasksIndex({
                               <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase">
                                 Pull requests {relationships.data.pullRequests.length}
                               </h4>
-                              <div className="flex max-h-72 flex-wrap gap-2 overflow-y-auto pr-1">
-                                {relationships.data.pullRequests.map((pullRequest) => (
-                                  <a
-                                    key={`${pullRequest.repo}#${pullRequest.number}`}
-                                    className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
-                                    href={pullRequest.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    {pullRequest.repo}#{pullRequest.number}
-                                  </a>
-                                ))}
+                              <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
+                                <Tree
+                                  nodes={buildTree(
+                                    pullRequestsWithParent(relationships.data.pullRequests),
+                                    pullRequestKey,
+                                  )}
+                                  getKey={pullRequestKey}
+                                  render={(pullRequest) => (
+                                    <a
+                                      className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-muted"
+                                      href={pullRequest.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {pullRequest.repo}#{pullRequest.number}
+                                    </a>
+                                  )}
+                                />
                               </div>
                             </section>
                           ) : null}
@@ -1367,35 +1492,42 @@ export default function TasksIndex({
                                     Session runs {relationships.data.runs.length}
                                   </h5>
                                   <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                                    {relationships.data.runs.map((run) => (
-                                      <div
-                                        key={run.id}
-                                        className="rounded-lg border bg-muted/30 p-3 text-xs"
-                                      >
-                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                          <span className="font-mono">
-                                            {run.cli}:{run.externalSessionId}
-                                          </span>
-                                          <Badge variant="outline">
-                                            {run.endedAt ? "ended" : "active"}
-                                          </Badge>
-                                        </div>
-                                        <p className="mt-2 text-muted-foreground">
-                                          {run.terminalId || "No terminal"} · {run.startedAt}
-                                        </p>
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                          <CopyCommand
-                                            command={resumeCommand(run.cli, run.externalSessionId)}
-                                          />
-                                          <CopyCommand command={`wr run focus ${run.id}`} />
-                                          {run.terminalId ? (
+                                    <Tree
+                                      nodes={buildTree(
+                                        runsWithParent(relationships.data.runs),
+                                        (run) => run.id,
+                                      )}
+                                      getKey={(run) => run.id}
+                                      render={(run) => (
+                                        <div className="rounded-lg border bg-muted/30 p-3 text-xs">
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="font-mono">
+                                              {run.cli}:{run.externalSessionId}
+                                            </span>
+                                            <Badge variant="outline">
+                                              {run.endedAt ? "ended" : "active"}
+                                            </Badge>
+                                          </div>
+                                          <p className="mt-2 text-muted-foreground">
+                                            {run.terminalId || "No terminal"} · {run.startedAt}
+                                          </p>
+                                          <div className="mt-3 flex flex-wrap gap-2">
                                             <CopyCommand
-                                              command={`wr terminal focus ${run.terminalId}`}
+                                              command={resumeCommand(
+                                                run.cli,
+                                                run.externalSessionId,
+                                              )}
                                             />
-                                          ) : null}
+                                            <CopyCommand command={`wr run focus ${run.id}`} />
+                                            {run.terminalId ? (
+                                              <CopyCommand
+                                                command={`wr terminal focus ${run.terminalId}`}
+                                              />
+                                            ) : null}
+                                          </div>
                                         </div>
-                                      </div>
-                                    ))}
+                                      )}
+                                    />
                                   </div>
                                 </div>
                               ) : null}

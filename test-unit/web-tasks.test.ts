@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   filterLedger,
+  pullRequestKey,
+  pullRequestsWithParent,
+  runsWithParent,
   type ConversationLink,
   type Device,
   type PullRequest,
@@ -26,6 +29,7 @@ const runs: Run[] = [
   {
     id: "run-a",
     cliSessionId: "session-a",
+    parentCliSessionId: null,
     cli: "codex",
     externalSessionId: "session-a",
     terminalId: "terminal-a",
@@ -186,5 +190,50 @@ describe("web ledger filters", () => {
     expect(result.conversationLinks.map((conversation) => conversation.id)).toEqual([
       "conversation-a",
     ]);
+  });
+
+  test("runsWithParent links a child run to the latest parent run by session and startedAt", () => {
+    const runItems = [
+      {
+        id: "run-parent-1",
+        cliSessionId: "parent",
+        parentCliSessionId: null,
+        startedAt: "2026-08-15 10:00:00",
+      },
+      {
+        id: "run-parent-2",
+        cliSessionId: "parent",
+        parentCliSessionId: null,
+        startedAt: "2026-08-15 11:00:00",
+      },
+      {
+        id: "run-child",
+        cliSessionId: "child",
+        parentCliSessionId: "parent",
+        startedAt: "2026-08-15 11:30:00",
+      },
+    ];
+    const withParent = runsWithParent(runItems);
+    expect(withParent[0]!.parentId).toBeNull();
+    expect(withParent[1]!.parentId).toBeNull();
+    expect(withParent[2]!.parentId).toBe("run-parent-2");
+  });
+
+  test("pullRequestsWithParent links child PRs by parentRepo and parentNumber", () => {
+    const prs = [
+      {
+        repo: "example/wr",
+        number: 1,
+        parentRepo: null as string | null,
+        parentNumber: null as number | null,
+      },
+      { repo: "example/wr", number: 2, parentRepo: "example/wr", parentNumber: 1 },
+      { repo: "other/repo", number: 3, parentRepo: "example/wr", parentNumber: 1 },
+    ];
+    const withParent = pullRequestsWithParent(prs);
+    expect(withParent[0]!.parentId).toBeNull();
+    expect(withParent[1]!.parentId).toBe("example/wr#1");
+    expect(withParent[2]!.parentId).toBe("example/wr#1");
+    expect(pullRequestKey(prs[0]!)).toBe("example/wr#1");
   });
 });
