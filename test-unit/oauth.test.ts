@@ -196,4 +196,22 @@ describe.serial("Cloudflare Access OAuth", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("does not begin browser login when interaction is disabled", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wr-oauth-noninteractive-"));
+    temporaryDirectories.push(directory);
+    let opened = false;
+
+    await expect(
+      accessToken(
+        "https://wr.example.com",
+        { XDG_CONFIG_HOME: directory },
+        () => {
+          opened = true;
+        },
+        false,
+      ),
+    ).rejects.toThrow("Cloudflare Access authentication is required");
+    expect(opened).toBe(false);
+  });
 });

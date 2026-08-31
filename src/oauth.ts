@@ -111,6 +111,8 @@ async function refreshAccessToken(
   );
 }
 
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1_000;
+
 async function login(
   baseUrl: string,
   env: NodeJS.ProcessEnv,
@@ -138,6 +140,8 @@ async function login(
   });
   const redirectUri = `http://127.0.0.1:${server.port}/callback`;
 
+  let timeout: NodeJS.Timeout | undefined;
+
   try {
     const registration = await oauth.dynamicClientRegistrationRequest(authorizationServer, {
       client_name: "wr CLI",
@@ -164,7 +168,14 @@ async function login(
 
     console.error("Opening Cloudflare Access login in your browser...");
     await openBrowser(authorizationUrl.href);
-    const callbackUrl = await callback;
+    const timeoutError = new Promise<never>((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error("Cloudflare Access login timed out")),
+        LOGIN_TIMEOUT_MS,
+      );
+    });
+    const callbackUrl = await Promise.race([callback, timeoutError]);
+    clearTimeout(timeout);
     const parameters = oauth.validateAuthResponse(authorizationServer, client, callbackUrl, state);
     const tokenResponse = await oauth.authorizationCodeGrantRequest(
       authorizationServer,
@@ -181,6 +192,7 @@ async function login(
     );
     return storeToken(baseUrl, authorizationServer.issuer, client.client_id, token, undefined, env);
   } finally {
+    clearTimeout(timeout);
     server.stop(true);
   }
 }
@@ -192,6 +204,7 @@ export async function accessToken(
     const opened = Bun.spawnSync(["open", url], { stdout: "ignore", stderr: "pipe" });
     if (opened.exitCode !== 0) throw new Error("Could not open the Cloudflare Access login page");
   },
+  interactive = true,
 ): Promise<string> {
   const normalizedBaseUrl = new URL(baseUrl).href;
   const stored = readStoredToken(normalizedBaseUrl, env);
@@ -204,5 +217,7 @@ export async function accessToken(
         throw error;
     }
   }
+  if (!interactive)
+    throw new Error("Cloudflare Access authentication is required; run an interactive wr command");
   return login(normalizedBaseUrl, env, openBrowser);
 }

@@ -91,8 +91,8 @@ const PositiveIntegerArgumentSchema = v.pipe(
 const textValue = valibot(NonEmptyStringSchema, { placeholder: "VALUE" });
 const positiveIntegerValue = valibot(PositiveIntegerArgumentSchema, { placeholder: 1 });
 
-function client(): ApiClient {
-  return new ApiClient(readConfig());
+function client(interactiveAuth = true): ApiClient {
+  return new ApiClient(readConfig(), process.env, interactiveAuth);
 }
 
 function openServer(): void {
@@ -494,7 +494,7 @@ async function runInternal(
         log("tool-event-ignored", { reason: "pull-request-url-count", count: urls.length });
         return;
       }
-      await client().request("/api/pull-requests", {
+      await client(false).request("/api/pull-requests", {
         method: "POST",
         body: JSON.stringify({
           pullRequest,
@@ -541,7 +541,7 @@ async function runInternal(
         endpoint = "/api/session-ends";
         break;
     }
-    const response = await client().request<{ runId?: string | null }>(endpoint, {
+    const response = await client(false).request<{ runId?: string | null }>(endpoint, {
       method: "POST",
       body: JSON.stringify({
         cli,
@@ -574,7 +574,7 @@ async function runInternal(
       await Promise.all(
         extractSlackThreadUrls(hookPayload.prompt!).map(async (url) => {
           try {
-            await client().request("/api/conversation-links", {
+            await client(false).request("/api/conversation-links", {
               method: "POST",
               body: JSON.stringify({
                 url,

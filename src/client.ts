@@ -8,8 +8,10 @@ export class ApiClient {
   readonly headers: Record<string, string>;
   readonly local: boolean;
   readonly env: NodeJS.ProcessEnv;
+  readonly interactiveAuth: boolean;
 
-  constructor(config: Config, env: NodeJS.ProcessEnv = process.env) {
+  constructor(config: Config, env: NodeJS.ProcessEnv = process.env, interactiveAuth = true) {
+    this.interactiveAuth = interactiveAuth;
     this.env = env;
     this.baseUrl = env.WR_SERVER_URL
       ? v.parse(ServerUrlSchema, env.WR_SERVER_URL)
@@ -31,7 +33,14 @@ export class ApiClient {
         accept: "application/json",
         ...(this.local
           ? {}
-          : { authorization: `Bearer ${await accessToken(this.baseUrl, this.env)}` }),
+          : {
+              authorization: `Bearer ${await accessToken(
+                this.baseUrl,
+                this.env,
+                undefined,
+                this.interactiveAuth,
+              )}`,
+            }),
         ...this.headers,
         ...(init?.body ? { "content-type": "application/json" } : {}),
         ...init?.headers,
