@@ -10,20 +10,20 @@ A root runtime initially coordinates a repository scope without claiming impleme
 
 ```sh
 # Once per approved local checkout/device. Static configuration alone grants no authority.
-wr-next init --agent-managed --runtime claude
+wr-next init --agent-managed --runtime claude,codex,omp
 # Optional operator-set default checks inherited by every new leaf:
-# wr-next init --agent-managed --runtime claude --checks tests
+# wr-next init --agent-managed --runtime claude,codex,omp --checks tests
 
-# Ordinary session; no Work ID or launcher required by this Claude profile.
-claude
+# Ordinary session; no Work ID or launcher required.
+claude  # or: codex / omp
 
 # Optional one-shot supervised execution, choosing the highest-ranked ready leaf.
-wr-next run --next -- claude
+wr-next run --next -- codex
 # Explicit Work selection remains supported for automation/debugging.
-wr-next run W12 -- claude
+wr-next run W12 -- omp
 ```
 
-The permanent integration files contain only static commands. Enrollment is owner-private state outside the repository and is bound to repository identity, approved worktree, device, authenticated principal, authority and scope. A clone of `.wr/config.json` or `.claude/settings.json` cannot acquire the local operator's authority.
+The permanent integration files contain only static commands or extension code. Enrollment is owner-private state outside the repository and is bound to repository identity, approved worktree, device, authenticated principal, authority and scope. A clone of `.wr/config.json` or a runtime integration file cannot acquire the local operator's authority.
 
 `init` without `--agent-managed` retains instrumentation-only semantics. Existing repositories must run the explicit enrollment command once and review runtime hook trust; no approval flags are bypassed. Git-hook installation remains separate if an existing hook manager requires manual integration.
 
@@ -174,19 +174,19 @@ await bridge.stop(true);
 
 The old `runtime.credentials` endpoint cannot bypass WorkDispatch for a coordinator root. Child native executions continue using the dedicated NativeRuntimeBridge contract; no fabricated parent Execution is required for root-issued delegation.
 
-## Plain Claude profile
+## Plain runtime profiles
 
-Implemented as permanent command hooks, not a mandatory `run` wrapper.
+Claude and Codex use permanent command hooks; OMP uses its permanent project extension. None requires a `run` wrapper after explicit enrollment.
 
-1. A SessionStart from an explicitly enrolled checkout identifies the actual ancestor Claude process using PID + start identity and the actual provider session.
-2. The trusted hook uses the private enrolled bootstrap; it does not supply the operator credential to the model.
-3. It opens/reuses the exact root invocation and returns bounded coordination guidance.
-4. PreToolUse binds the actual `tool_use_id` to a WorkDispatch.
-5. Bash input receives only private file references for that dispatch. No `permissionDecision: allow` is returned; normal runtime permission checks remain.
-6. PostToolUse/PostToolUseFailure close the matching slot. PermissionDenied and PostToolBatch cover explicitly resolved refusal/batch paths without promoting them to a result.
-7. Git hooks use the exact worker context of the Bash invocation. Model CLI `report` and `done` use that same assignment.
+1. Session start from an explicitly enrolled checkout identifies the actual ancestor runtime process using PID + start identity and the actual provider session.
+2. The trusted hook or extension uses the private enrolled bootstrap; it does not supply the operator credential to the model.
+3. It opens or reuses the exact root invocation and returns bounded coordination guidance.
+4. The pre-tool event binds the actual tool-call ID to a WorkDispatch.
+5. Shell input receives only private file references for that dispatch. Claude passively rewrites Bash input. Codex uses its required `permissionDecision: allow` rewrite marker; Codex core still applies its sandbox and approval policy to the rewritten command. OMP returns revised input before its schema validation, scheduling and approval gate.
+6. Post-tool events close the matching slot. Claude additionally handles explicit permission-denied and resolved-batch events.
+7. Git hooks use the exact worker context of the shell invocation. Model CLI `report` and `done` use that same assignment.
 
-Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Background tool requests and unbound native Agent/Task/SendMessage are not silently routed to the root. Native children must use the trusted bridge.
+Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Background tool requests and unbound native Agent/Task/SendMessage equivalents are not silently routed to the root. Native children must use the trusted bridge.
 
 The runtime-process lookup proves only the identity under the cooperating same-user OS model. It does not infer a work item from cwd, branch, latest session or prompt text. No stable owner identity means fail closed with an explanation/fallback. Desktop/embedded/unrecognized launch layouts must use a supported bridge or `run --next` until a host identity contract exists.
 
@@ -205,15 +205,15 @@ A changed local listening port may be refreshed only after authenticating the sa
 | Path | Code/test status |
 | --- | --- |
 | Coordinator commands, claims, scope, lifecycle | Implemented and tested with real local HTTP/SQLite |
-| Plain Claude startup and per-tool hook binding | Implemented; actual generated hooks executed by synthetic Claude-named OS processes |
-| Real Claude provider calls | Not executed in this environment |
-| Codex/OMP plain startup Coordinator | Not implemented; use `run --next` or a trusted harness using CoordinatorBridge |
-| Codex/OMP existing permanent root integrations | Retained; not reclassified as full native bootstrap |
+| Plain Claude startup and per-tool hook binding | Implemented; generated hooks executed by a synthetic Claude-named OS process |
+| Plain Codex startup and per-tool hook binding | Implemented against the official rewrite contract; synthetic tool flow passed and installed Codex 0.153.4 executed start/end hooks |
+| Plain OMP startup and per-tool extension binding | Implemented; installed OMP 18.1.12 completed a model-driven add/claim/done flow with the wr-next extension loaded last |
+| Remaining provider acceptance | Real Claude and Codex tool calls; Codex tool smoke was blocked by the active account usage limit |
 | Native children | Authority + bridge contract tested; ambient provider-native spawn still guarded |
 | Devin | Generic supervised execution only |
-| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 221 tests and the real workerd smoke test |
+| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 223 tests and the real workerd smoke test |
 
-Do not copy Claude's passive Bash-input rewrite to Codex: the current official Codex contract requires `permissionDecision: allow` with `updatedInput`, unlike the passive rewriting used here. An approved native dispatcher is preferable to accidentally changing the provider's permission policy.
+Codex requires `permissionDecision: allow` whenever a trusted hook returns `updatedInput`. In Codex core this marker enables the hook rewrite; the resulting input still passes through core sandbox and approval evaluation. Codex hooks and OMP extensions use last-rewrite-wins composition. A later input rewriter can remove wr-next's private dispatch prefix; the resulting CLI or Git operation fails closed as unbound rather than falling back to ambient work. OMP users with another input-rewriting extension must arrange for wr-next to load last or use an explicit trusted harness until the host offers composable input middleware.
 
 Additional limits:
 
@@ -230,8 +230,8 @@ New `coordinationGrants`, `coordinators`, `dispatches` tables and optional links
 1. Stop wr-next authority and take a consistent backup of its SQLite/private state.
 2. Apply the patch based on `d51959179856bf1755f9d2d8e5ef03260e532fed`.
 3. Run `bun ci`, `bun run verify`, and `bun run test:workerd` on supported Bun.
-4. In a synthetic/disposable test repo run `wr-next init --agent-managed --runtime claude` and review actual runtime hook trust.
-5. Test live: session start without Work, inline plan, explicit/atomic selection, reports, submission, permission denial, concurrent tools, compact/resume, parent/child boundaries and Git provenance.
+4. In a synthetic/disposable test repo run `wr-next init --agent-managed --runtime claude,codex,omp`, review actual runtime hook trust, and start OMP from the initialized worktree root.
+5. Test each live runtime: session start without Work, inline plan, explicit/atomic selection, reports, submission, permission denial, concurrent tools, compact/resume, parent/child boundaries and Git provenance.
 6. Enable one actual development repo only after live acceptance. Do not deploy/rename/replace production wr automatically.
 
 Rolling back the binary may require restoring the version-2 DB backup; older binaries reject a version-3 store. Merely switching source code is not a data rollback.
@@ -245,6 +245,8 @@ Official runtime contracts checked for this design:
 ```text
 https://code.claude.com/docs/en/hooks
 https://developers.openai.com/codex/hooks
+https://github.com/can1357/oh-my-pi/blob/main/docs/extensions.md
+https://github.com/can1357/oh-my-pi/blob/main/docs/extension-loading.md
 ```
 
-Claude: PreToolUse updatedInput / normal permission handling, exact tool IDs, PostToolUseFailure, PermissionDenied, PostToolBatch and SessionStart. Codex: updatedInput's explicit allow requirement. These references justify profile boundaries; they do not establish live integration success.
+Claude supports passive `PreToolUse` input rewriting, exact tool IDs and explicit failure/denial/batch completion events. Codex requires an explicit allow control marker for `updatedInput`, while core retains sandbox and approval evaluation. OMP applies revised `tool_call` input before validation, scheduling and approval. These references define the adapter contracts; installed-version interoperability remains a live acceptance step.

@@ -88,9 +88,9 @@ Run binding is supplied privately via the environment. `WR_NEXT_RUNTIME_KIND` se
 
 | Runtime | Static configuration | Implemented event path | Native child binding |
 |---|---|---|---|
-| Claude | `.claude/settings.json` | Root SessionStart/guidance, compact window, targeted PostToolUse; native guards | Requires trusted harness; ordinary wrapper keeps the existing unbound-child guard |
-| Codex | `.codex/hooks.json` | Same normalized root lifecycle using its documented hook format | Requires trusted harness; spawn/child calls are guarded, never guessed from parent session |
-| OMP | `.omp/extensions/wr-next.ts` | `session_start`, `before_agent_start`, `session_compact`, `tool_call`, targeted `tool_result`, advisory shutdown | Requires trusted harness; native task invocation is guarded |
+| Claude | `.claude/settings.json` | Plain Coordinator bootstrap, exact per-tool dispatch, compact window and advisory shutdown | Requires trusted harness; unbound native children are denied |
+| Codex | `.codex/hooks.json` | Plain Coordinator bootstrap and exact per-tool rewrite using the documented control marker | Requires trusted harness; spawn/child calls are guarded |
+| OMP | `.omp/extensions/wr-next.ts` | Plain Coordinator bootstrap, revised tool input, compact window and advisory shutdown | Requires trusted harness; native task invocation is guarded |
 | Devin | No native file generated | Generic process lifecycle and existing Git/PR provenance | Not claimed |
 | Generic | No native file required | Explicit subprocess lifecycle | Not claimed |
 
@@ -107,6 +107,7 @@ The explicit `run --runtime claude --isolated` path generates an ephemeral setti
 Use **one** project representation: `.codex/hooks.json`. Do not also add inline hooks to `.codex/config.toml`. Existing inline hooks at that layer produce a diagnostic requiring the operator to choose/merge the representation. Existing model/options TOML is preserved byte-for-byte.
 
 Do not set hooks-enabled features, project trust, managed-only policy, permission grants, or bypass flags. Trust remains the runtime's decision. The installer asks the operator to review `/hooks`; installing a file is not proof that it is loaded or trusted.
+Plain agent-managed startup uses Codex's required `permissionDecision: allow` marker only to return `updatedInput`. Codex core applies the rewritten command before its ordinary sandbox and approval evaluation; wr-next does not set hook-trust or permission-bypass options.
 
 The TOML conflict detector is intentionally conservative, not a general TOML parser. Quoted/exotic structures that bypass a simple detector remain a live-settings concern; the installer does not claim full effective configuration analysis.
 
@@ -116,9 +117,9 @@ Use the primary project's **extension** API, not guessed `.omp/hooks/pre` paths 
 
 Native extension discovery in the reviewed upstream documentation is **cwd-only** and can honor Git ignore rules. Consequently this profile requires launch from the initialized worktree root and reports an ignored extension as not ready. It does not walk ancestors and silently claim OMP did so.
 
-Cross-provider discovery is not proof that every provider's hook JSON is executed. Regardless, wr-next callbacks from the wrong `--source` are inert before reading context. The OMP factory additionally deduplicates on the host API instance, not a process-global marker that would disable legitimate reloads. Existing unrelated extensions remain untouched.
+Cross-provider discovery is not proof that every provider integration is executed. Regardless, wr-next callbacks from the wrong `--source` are inert before reading private state. The OMP factory additionally deduplicates on the host API instance, not a process-global marker that would disable legitimate reloads. Existing unrelated extensions remain untouched.
 
-No `process.env` mutation switches the current actor between concurrent tools. Native per-tool dispatch belongs to the existing harness bridge.
+For agent-managed startup, OMP's extension returns the dispatch-prefixed input from `tool_call`. OMP revalidates and schedules that revised input before its normal approval gate; no process-global environment mutation switches concurrent tools.
 
 ## Installation safety
 
@@ -186,9 +187,9 @@ Only targeted PR create/merge output is considered for GitHub reconciliation. Fa
 
 ## Tests and acceptance
 
-New tests cover settings preservation, idempotence, ownership-aware uninstall, fresh-clone adoption, malformed/disabled/conflicting config, symlink/hardlink paths, Git worktrees, OMP cwd/ignore behavior, lock/journal recovery, static Claude/Codex root protocol, generated OMP extension behavior, source-mode deduplication, malformed blocking events, unbound child denial, missing startup receipt, session mismatch, and live-writer retention after SessionEnd.
+New tests cover settings preservation, idempotence, ownership-aware uninstall, fresh-clone adoption, malformed/disabled/conflicting config, symlink/hardlink paths, Git worktrees, OMP cwd/ignore behavior, lock/journal recovery, plain Claude/Codex/OMP Coordinator lifecycle, exact tool-input binding, source-mode deduplication, malformed blocking events, unbound child denial, missing startup receipt, session mismatch, and live-writer retention after advisory shutdown.
 
-Provider tests execute synthetic hook payloads/host events through actual CLI processes and the local authority. They do not invoke a paid model or prove native provider compatibility. The implementation delivery records its actual execution environment separately; Node compatibility-copy results are not described as Bun/workerd success.
+Provider tests execute synthetic hook payloads and OMP host events through actual CLI processes and the local authority. Installed-provider smoke checks remain a separate acceptance step; a synthetic process does not certify every provider version, settings layer, or interactive permission path.
 
 Live acceptance after applying:
 

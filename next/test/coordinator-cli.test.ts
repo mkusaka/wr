@@ -13,11 +13,15 @@ import { managementCommand } from "../src/integrations/runtime/coordinator-hook.
 const cli = resolve("dist/src/cli/main.js");
 const bin = resolve("bin");
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
-function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{
+type CommandResult = {
     code: number;
     stdout: string;
     stderr: string;
-}> {
+};
+type CliFixture = {
+    cli(args: string[], env?: NodeJS.ProcessEnv): Promise<CommandResult>;
+};
+function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<CommandResult> {
     return new Promise((res, rej) => {
         const child = spawn(process.execPath, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "", stderr = "";
@@ -51,8 +55,8 @@ async function fixture() {
         }
     };
 }
-async function init(f: Awaited<ReturnType<typeof fixture>>, managed = true) {
-    const result = await f.cli(["init", "--runtime", "claude", "--no-git-hooks", ...(managed ? ["--agent-managed"] : [])]);
+async function init(f: CliFixture, managed = true, runtime: "claude" | "codex" | "omp" = "claude") {
+    const result = await f.cli(["init", "--runtime", runtime, "--no-git-hooks", ...(managed ? ["--agent-managed"] : [])]);
     assert.equal(result.code, 0, result.stderr);
     return JSON.parse(result.stdout);
 }
@@ -65,12 +69,15 @@ function fakeClaude(f: {
     raw?: unknown;
     denyAt?: number;
     denialHook?: "PermissionDenied" | "PostToolBatch";
+    runtime?: "claude" | "codex";
 } = {}) {
-    const file = join(f.repo, "claude");
+    const runtime = options.runtime ?? "claude";
+    const file = join(f.repo, runtime);
+    const settingsPath = runtime === "claude" ? ".claude/settings.json" : ".codex/hooks.json";
     writeFileSync(file, `
-const {readFileSync,writeFileSync}=require('node:fs'); const {spawn}=require('node:child_process');
-const settings=JSON.parse(readFileSync('.claude/settings.json','utf8'));
-const commands=${JSON.stringify(commands)}; const calls=[];
+const {readFileSync}=require('node:fs'); const {spawn}=require('node:child_process');
+const settings=JSON.parse(readFileSync(${JSON.stringify(settingsPath)},'utf8'));
+const runtime=${JSON.stringify(runtime)}; const commands=${JSON.stringify(commands)}; const calls=[];
 function exec(command,input){return new Promise((resolve,reject)=>{const p=spawn('/bin/sh',['-c',command],{env:process.env,stdio:['pipe','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.on('error',reject);p.on('close',code=>resolve({code,out,err}));p.stdin.end(input??'');});}
 async function hook(name,fields={}){ const command=settings.hooks[name]?.[0]?.hooks?.[0]?.command;if(!command)throw new Error('missing hook '+name);const result=await exec(command,JSON.stringify({cwd:process.cwd(),session_id:'fixture-session',hook_event_name:name,...fields})); return {...result,json:result.out.trim()?JSON.parse(result.out):{}}; }
 (async()=>{
@@ -79,9 +86,25 @@ async function hook(name,fields={}){ const command=settings.hooks[name]?.[0]?.ho
  for(let i=0;i<commands.length;i++){const command=commands[i], id='tool-'+i;const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},...${JSON.stringify(options.extra ?? {})}}); const denied=pre.code!==0||pre.json.hookSpecificOutput?.permissionDecision==='deny';
  if(denied){calls.push({name:'denied',command,pre});continue;}
  if(i===${JSON.stringify(options.denyAt ?? -1)}){const post=await hook(${JSON.stringify(options.denialHook ?? "PostToolBatch")},{tool_name:'Bash',tool_use_id:id,tool_calls:[{tool_name:'Bash',tool_use_id:id,tool_response:'Permission denied'}]});calls.push({name:'permission-denied',command,pre,post});continue;}
- const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);const post=await hook(result.code===0?'PostToolUse':'PostToolUseFailure',{tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}}); calls.push({name:'tool',command,pre,result,post}); }
+ const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);const post=await hook(runtime==='claude'&&result.code!==0?'PostToolUseFailure':'PostToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}}); calls.push({name:'tool',command,pre,result,post}); }
  calls.push({name:'end',...await hook('SessionEnd')}); console.log(JSON.stringify(calls));
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});`);
+    return file;
+}
+function fakeOmp(f: {
+    repo: string;
+}, commands: string[]) {
+    const file = join(f.repo, "omp");
+    writeFileSync(file, `
+const {spawnSync}=require('node:child_process');
+function exec(command){const result=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});return {code:result.status??1,out:result.stdout??'',err:result.stderr??''};}
+(async()=>{
+// This generated host intentionally loads the generated project extension through OMP's runtime-discovery boundary.
+const {default:install}=await import('./.omp/extensions/wr-next.ts');const handlers=new Map();install({on:(name,handler)=>handlers.set(name,handler)});
+const ctx={cwd:process.cwd(),sessionManager:{getSessionId:()=> 'fixture-session'},ui:{notify:(message)=>{throw new Error(message)}}};
+await handlers.get('session_start')({},ctx);const prompt=await handlers.get('before_agent_start')({},ctx);if(!prompt?.message?.content?.includes('coordinate work'))throw new Error('coordinator guidance missing');
+const calls=[];for(let i=0;i<${JSON.stringify(commands)}.length;i++){const command=${JSON.stringify(commands)}[i],toolCallId='tool-'+i,input={command};const decision=await handlers.get('tool_call')({toolName:'bash',toolCallId,input},ctx);if(decision?.block)throw new Error(decision.reason);const actual=decision?.input?.command??command;const result=exec(actual);await handlers.get('tool_result')({toolName:'bash',toolCallId,input:decision?.input??input,isError:result.code!==0,content:[{type:'text',text:result.out||result.err}]},ctx);calls.push({command,actual,result});}
+await handlers.get('session_shutdown')({},ctx);console.log(JSON.stringify(calls));})().catch(error=>{console.error(error.stack);process.exitCode=1});`);
     return file;
 }
 test("explicit init creates private enrollment; static init alone grants nothing", async () => {
@@ -158,6 +181,41 @@ test("plain Claude process uses actual installed hooks and per-tool contexts wit
         assert.equal(Object.values(state.work).find(w => w.title === "A new user request")!.state, "done");
         assert.equal(Object.values(state.runs)[0]!.state, "unknown"); // SessionEnd is advisory.
         assert.ok(!result.stdout.includes("wn1."));
+    }
+    finally {
+        await f.close();
+    }
+});
+test("plain Codex process coordinates through installed hooks and preserves rewritten-input approval", async () => {
+    const f = await fixture();
+    try {
+        await init(f, true, "codex");
+        const fake = fakeClaude(f, ["wr-next add 'Codex request'", "wr-next next --claim", "wr-next report --progress 'Codex working'", "wr-next done --summary 'Codex submitted'"], { runtime: "codex" });
+        const result = await run([fake], f.repo, f.env);
+        assert.equal(result.code, 0, result.stderr);
+        assert.match(result.stdout, /"permissionDecision":"allow"/);
+        assert.match(result.stdout, /WR_NEXT_COORDINATOR_TOOL/);
+        const state = f.server.workspace.store.snapshot();
+        assert.equal(Object.values(state.work).find(work => work.title === "Codex request")!.state, "done");
+        assert.equal(Object.values(state.runs)[0]!.runtime, "codex");
+        assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
+    }
+    finally {
+        await f.close();
+    }
+});
+test("plain OMP process coordinates through its project extension and revised tool input", async () => {
+    const f = await fixture();
+    try {
+        await init(f, true, "omp");
+        const fake = fakeOmp(f, ["wr-next add 'OMP request'", "wr-next next --claim", "wr-next report --progress 'OMP working'", "wr-next done --summary 'OMP submitted'"]);
+        const result = await run([fake], f.repo, f.env);
+        assert.equal(result.code, 0, result.stderr);
+        assert.match(result.stdout, /WR_NEXT_COORDINATOR_TOOL/);
+        const state = f.server.workspace.store.snapshot();
+        assert.equal(Object.values(state.work).find(work => work.title === "OMP request")!.state, "done");
+        assert.equal(Object.values(state.runs)[0]!.runtime, "omp");
+        assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
     }
     finally {
         await f.close();

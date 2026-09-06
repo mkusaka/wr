@@ -49,16 +49,16 @@ Installation, actual loading/trust, and native subagent binding are separate sta
 
 ## Agent-managed coordination
 
-Approve one local checkout/device once, then start Claude normally without choosing a Work ID:
+Approve one local checkout/device once, then start any installed native profile normally without choosing a Work ID:
 
 ```sh
-wr-next init --agent-managed --runtime claude
+wr-next init --agent-managed --runtime claude,codex,omp
 # Optional operator-owned default verification policy:
-# wr-next init --agent-managed --runtime claude --checks tests
-claude
+# wr-next init --agent-managed --runtime claude,codex,omp --checks tests
+claude  # or: codex / omp
 ```
 
-The root session starts as a scoped Coordinator without an implementation Execution or writer reservation. It can plan inside the approved repository scope, inspect deterministic ready candidates, and atomically claim one leaf:
+The root session starts as a scoped Coordinator without an implementation Execution. It holds the approved environment reservation while it can still write, plans inside the approved repository scope, inspects deterministic ready candidates, and atomically claims one leaf:
 
 ```sh
 wr-next status
@@ -68,7 +68,7 @@ wr-next report --decision "Reuse the existing API" --reason "Preserve its contra
 wr-next done --summary "Submitted the implementation"
 ```
 
-Tool calls keep the Execution binding they received when dispatched; a late tool cannot follow the Coordinator onto another Work. Enrollment is private and device/authority-bound. Committed hook files alone grant no coordination authority. Plain-start bootstrap is currently implemented only for Claude; Codex and OMP use `wr-next run --next -- COMMAND` or a trusted `CoordinatorBridge`. See [agent-managed coordination](docs/agent-managed-coordination.md).
+Tool calls keep the Execution binding they received when dispatched; a late tool cannot follow the Coordinator onto another Work. Enrollment is private and device/authority-bound. Committed hook or extension files alone grant no coordination authority. Plain-start bootstrap is implemented for Claude, Codex, and OMP; Codex still requires project-hook trust, and OMP must start at the initialized worktree root. See [agent-managed coordination](docs/agent-managed-coordination.md).
 
 ## Explicit operator-selected work
 

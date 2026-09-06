@@ -112,8 +112,8 @@ export function managementCommand(input: string): boolean {
 }
 /** Return true only when this permanent hook is handled by explicit repo coordination. */
 export async function coordinatorHook(input: string, source: string, expected: string): Promise<boolean> {
-    if (source !== "claude")
-        return false; // Other profiles use the trusted bridge or ID-free run --next.
+    demand(["claude", "codex", "omp"].includes(source), "UNSUPPORTED_ADAPTER", "Unsupported coordinator runtime", 400);
+    const runtime = source as "claude" | "codex" | "omp";
     const payload = JSON.parse(input) as Record<string, any>;
     demand(payload && payload.hook_event_name === expected, "INVALID_EVENT", "Hook event mismatch", 400);
     if (typeof payload.cwd !== "string" || typeof payload.session_id !== "string")
@@ -133,10 +133,10 @@ export async function coordinatorHook(input: string, source: string, expected: s
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "A descendant process cannot inherit a repository Coordinator grant. Use explicit child delegation." } }));
         return true;
     }
-    const owner = providerOwner(source);
+    const owner = providerOwner(runtime);
     demand(owner, "RUNTIME_IDENTITY_UNAVAILABLE", "Cannot identify this runtime invocation. Use wr-next run --next or a native dispatcher; no session-only guess was made");
-    const key = digest({ root, source, session: payload.session_id, owner }), ownerFile = join(stateHome(), "coordinator-owners", `${key}.json`);
-    requireInstalled(root, "claude");
+    const key = digest({ root, source: runtime, session: payload.session_id, owner }), ownerFile = join(stateHome(), "coordinator-owners", `${key}.json`);
+    requireInstalled(root, runtime);
     // Never bootstrap an inherited native child as a new repository coordinator.
     if (payload.agent_id || expected === "SubagentStart" || expected === "SubagentStop") {
         if (expected === "PreToolUse")
@@ -151,7 +151,7 @@ export async function coordinatorHook(input: string, source: string, expected: s
     let bridge: CoordinatorBridge;
     if (!existsSync(ownerFile)) {
         await reapCoordinators(stateHome(), registration);
-        bridge = await CoordinatorBridge.open(registration.bootstrap, { runtime: source, session: payload.session_id, actor: "root", invocation: digest({ owner, session: payload.session_id }), environment: registration.environment });
+        bridge = await CoordinatorBridge.open(registration.bootstrap, { runtime, session: payload.session_id, actor: "root", invocation: digest({ owner, session: payload.session_id }), environment: registration.environment });
         atomic(ownerFile, { ...owner, controller: join(bridge.contextFile, "..", "controller.json"), session: payload.session_id, root } satisfies Owner);
     }
     else {
@@ -167,22 +167,31 @@ export async function coordinatorHook(input: string, source: string, expected: s
         return true;
     }
     if (expected === "PreToolUse") {
-        const deniedNative = ["Agent", "Task", "SendMessage"].includes(payload.tool_name);
+        const nativeTools: Record<typeof runtime, string[]> = {
+            claude: ["Agent", "Task", "SendMessage"],
+            codex: ["spawn_agent", "Agent", "send_input", "resume_agent", "close_agent"],
+            omp: ["task", "Task", "Agent", "spawn_agent"],
+        };
+        const deniedNative = nativeTools[runtime].includes(payload.tool_name);
         const state = await new Client(bridge.context).request<any>("/v1/coordination");
-        const canRead = ["Read", "Grep", "Glob", "WebSearch", "WebFetch"].includes(payload.tool_name);
+        const canRead = ["Read", "read", "Grep", "grep", "Glob", "glob", "WebSearch", "web_search", "WebFetch", "web_fetch"].includes(payload.tool_name);
         const input = payload.tool_input ?? {};
-        const deniedUnclaimed = !state.currentExecution && !canRead && !(payload.tool_name === "Bash" && typeof input.command === "string" && managementCommand(input.command));
+        const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
+        const deniedUnclaimed = !state.currentExecution && !canRead && !(shell && typeof input.command === "string" && managementCommand(input.command));
         if (deniedNative || deniedUnclaimed || input.run_in_background === true) {
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: deniedNative ? "Native dispatch requires a dedicated child binding; use the harness bridge or explicit delegation." : "Claim work before implementation. Use a separate wr-next next --claim tool call; background writers are not supported by this coordinator profile." } }));
             return true;
         }
         demand(typeof payload.tool_use_id === "string", "INVALID_EVENT", "Tool identity is required for stable assignment");
         const env = await bridge.toolEnvironment(payload.tool_use_id, { tool: payload.tool_name, input });
-        if (payload.tool_name === "Bash") {
-            demand(typeof input.command === "string", "INVALID_EVENT", "Bash command is required");
+        if (shell) {
+            demand(typeof input.command === "string", "INVALID_EVENT", "Shell command is required");
             const command = `export WR_NEXT_COORDINATOR=${quote(env.WR_NEXT_COORDINATOR!)} WR_NEXT_COORDINATOR_TOOL=${quote(env.WR_NEXT_COORDINATOR_TOOL!)}; unset WR_NEXT_CONTEXT WR_NEXT_BINDING_REQUIRED WR_NEXT_RUNTIME_AGENT WR_NEXT_RUNTIME_CONNECTION; ${input.command}`;
-            // Deliberately omit permissionDecision=allow: normal Claude permissions still apply.
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, updatedInput: { ...input, command } } }));
+            const output: Record<string, unknown> = { hookEventName: expected, updatedInput: { ...input, command } };
+            // Codex requires this control marker for rewrites; core sandbox and approval still evaluate the rewritten command.
+            if (runtime === "codex")
+                output.permissionDecision = "allow";
+            console.log(JSON.stringify({ hookSpecificOutput: output }));
         }
         return true;
     }
