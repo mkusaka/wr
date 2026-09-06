@@ -1,6 +1,7 @@
 import type { State, Principal, CommitSnapshot, Artifact, PullRequest } from "./model.js";
 import { demand, digest, uid, values, now, manifest, Fault } from "./util.js";
 import { emit } from "./work.js";
+import { sessionFor, endExecution } from "./runtime.js";
 import { text, object, integer, list, choice, flag, optionalText, type ObjectValue } from "../protocol/validate.js";
 function sha(x: unknown): string { const v = text(x, "sha", 64); demand(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(v), "INVALID_SHA", "Full SHA required", 400); return v; }
 function scopedExecution(s: State, p: Principal, id?: string) { const e = s.executions[id ?? p.execution ?? ""]; demand(e, "NOT_FOUND", "Observation execution not found", 404); demand(!p.execution || p.execution === e.id, "FORBIDDEN", "Observation outside collector scope", 403); return e; }
@@ -29,14 +30,14 @@ export function applyObservation(s: State, p: Principal, c: ObjectValue & {
     switch (c.type) {
         case "check.record": return recordCheck(s, p, c);
         case "runtime.event": {
+            demand(p.role === "launcher", "UNAUTHORIZED_OBSERVATION", "Only a lifecycle launcher can change runtime state", 403);
             const e = scopedExecution(s, p, optionalText(c.execution, "execution")), run = s.runs[e.run]!;
             const event = choice(c.event, ["started", "heartbeat", "window", "ended", "launch_failed", "unknown"] as const);
             if (c.externalSessionId !== undefined) {
                 const externalId = text(c.externalSessionId, "externalSessionId", 300);
-                const sid = digest({ runtime: run.runtime, externalId, device: run.device });
+                const sid = sessionFor(s, run.runtime, externalId, run.device);
                 if (run.session)
                     demand(s.sessions[run.session]?.externalId === externalId, "SESSION_CONFLICT", "Do not rebind an existing run's session");
-                s.sessions[sid] = { id: sid, runtime: run.runtime, externalId, device: run.device };
                 run.session = sid;
             }
             if (event === "window") {
@@ -44,21 +45,22 @@ export function applyObservation(s: State, p: Principal, c: ObjectValue & {
                 if (!run.windows.includes(window))
                     run.windows.push(window);
             }
-            if (event === "unknown")
+            if (event === "unknown" && run.state !== "ended")
                 run.state = "unknown";
+            if ((event === "started" || event === "heartbeat") && run.state !== "ended")
+                run.state = "active";
             if (event === "ended" || event === "launch_failed") {
                 const exit = c.exitCode === undefined ? null : integer(c.exitCode, "exitCode", 0, 255);
                 // Late process observations cannot undo recovery/fencing.
-                if (e.state === "active") {
-                    e.state = event === "launch_failed" || exit !== 0 ? "failed" : values(s.results).some(r => r.execution === e.id) ? "finished" : "interrupted";
-                    e.endedAt = now();
-                    for (const r of values(s.reservations))
-                        if (r.execution === e.id)
-                            r.state = "released";
-                }
+                endExecution(s, e, event, exit);
                 if (!values(s.executions).some(x => x.run === run.id && x.state === "active")) {
                     run.state = "ended";
                     run.endedAt = now();
+                    const agent = run.runtimeAgent ? s.runtimeAgents[run.runtimeAgent] : undefined;
+                    if (agent) {
+                        agent.state = "ended";
+                        agent.endedAt = now();
+                    }
                 }
             }
             emit(s, p, `runtime.${event}`, { run: run.id, execution: e.id, windowId: c.windowId, exitCode: c.exitCode, signal: c.signal }, e.work, "observed");

@@ -63,7 +63,7 @@ export function dependencyBasis(s: State, w: Work): Record<string, string> {
     }
     return basis;
 }
-export function reasons(s: State, w: Work, environment?: string, readOnly = false): string[] {
+export function reasons(s: State, w: Work, environment?: string, readOnly = false, coordinator = false): string[] {
     const why: string[] = [];
     if (w.state === "cancelled" || (!readOnly && w.state === "done"))
         why.push("terminal");
@@ -74,8 +74,8 @@ export function reasons(s: State, w: Work, environment?: string, readOnly = fals
             why.push(`needs:${s.work[s.dependencies[dep]!.prerequisite]!.key}`);
     if (!readOnly && values(s.executions).some(e => e.work === w.id && e.mode === "write" && e.state === "active"))
         why.push("active_writer");
-    if (w.lane && s.lanes[w.lane]) {
-        const active = values(s.executions).filter(e => e.state === "active" && s.work[e.work]?.lane === w.lane).length;
+    if (!coordinator && w.lane && s.lanes[w.lane]) {
+        const active = values(s.executions).filter(e => e.state === "active" && !(e.role === "orchestrator" && e.mode === "read") && s.work[e.work]?.lane === w.lane).length;
         if (active >= s.lanes[w.lane]!.capacity)
             why.push(`capacity:${w.lane}`);
     }
@@ -96,7 +96,7 @@ export function reasons(s: State, w: Work, environment?: string, readOnly = fals
             if (w.resources.some(r => other.resources.some(x => x.key === r.key)))
                 why.push(`resource:legacy:${other.key}`);
         }
-        if (w.lane && s.lanes[w.lane] && values(s.work).filter(x => x.lane === w.lane && x.legacy?.run.startsWith("running")).length + values(s.executions).filter(e => e.state === "active" && s.work[e.work]?.lane === w.lane).length >= s.lanes[w.lane]!.capacity)
+        if (w.lane && s.lanes[w.lane] && values(s.work).filter(x => x.lane === w.lane && x.legacy?.run.startsWith("running")).length + values(s.executions).filter(e => e.state === "active" && !(e.role === "orchestrator" && e.mode === "read") && s.work[e.work]?.lane === w.lane).length >= s.lanes[w.lane]!.capacity)
             why.push(`capacity:${w.lane}`);
         if (["ordered", "self-verified", "review-waiting", "fixing", "merge-ready"].includes(w.legacy.stage))
             why.push(`legacy:${w.legacy.stage}`);

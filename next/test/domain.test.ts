@@ -17,7 +17,8 @@ function fixture() {
     const start = (work: string, extra: Record<string, unknown> = {}) => cmd({ type: "execution.start", work, environment: uid("env"), launchId: uid("launch"), ...extra }).result;
     const worker = (execution: string): Principal => ({ ...owner, role: "worker", execution });
     const collector = (execution?: string, checks = ["test", "git:*", "github:*"]): Principal => ({ ...owner, role: "collector", execution, checks });
-    return { sql, ws, cmd, add, start, worker, collector, state: () => ws.store.snapshot() };
+    const launcher = (execution: string): Principal => ({ ...owner, role: "launcher", execution });
+    return { sql, ws, cmd, add, start, worker, collector, launcher, state: () => ws.store.snapshot() };
 }
 function rejects(code: string, fn: () => unknown) { assert.throws(fn, (e: any) => e.code === code); }
 test("dependency and child aggregation determine current frontier", () => {
@@ -69,11 +70,11 @@ test("requirement changes invalidate acceptance but preserve history", () => { c
 test("requirement changes fence a stale execution submission", () => { const f = fixture(), w = f.add(), e = f.start(w.id); f.cmd({ type: "work.update", work: w.id, description: "new", replan: true }); rejects("STALE_SCOPE", () => f.cmd({ type: "result.submit", summary: "old work", manifest: [] }, f.worker(e.execution))); f.sql.close(); });
 test("upstream re-open invalidates downstream's old basis", () => { const f = fixture(), a = f.add(), b = f.add("b", { needs: [a.id] }); f.cmd({ type: "result.submit", work: a.id, summary: "a", manifest: [] }); f.cmd({ type: "result.submit", work: b.id, summary: "b", manifest: [] }); f.cmd({ type: "work.reopen", work: a.id, reason: "new attempt" }); assert.equal(f.state().work[b.id]!.state, "open"); f.sql.close(); });
 test("human hold cannot be released by worker", () => { const f = fixture(), w = f.add(), e = f.start(w.id); const h = f.cmd({ type: "work.report", work: w.id, kind: "blocked", summary: "approval" }).result.hold; rejects("FORBIDDEN", () => f.cmd({ type: "hold.resolve", hold: h, reason: "I approve" }, f.worker(e.execution))); f.sql.close(); });
-test("fencing never comes from heartbeat expiration alone", () => { const f = fixture(), w = f.add(), e = f.start(w.id); f.cmd({ type: "runtime.event", event: "unknown", execution: e.execution }, f.collector(e.execution), true); rejects("NOT_READY", () => f.start(w.id)); rejects("STOP_CONFIRMATION_REQUIRED", () => f.cmd({ type: "execution.recover", execution: e.execution, reason: "timeout" })); f.cmd({ type: "execution.recover", execution: e.execution, reason: "stopped externally", stopped: true }); rejects("FENCED_EXECUTION", () => f.cmd({ type: "result.submit", summary: "late", manifest: [] }, f.worker(e.execution))); const retry = f.start(w.id, { continuedFrom: e.execution }); assert.notEqual(retry.execution, e.execution); f.sql.close(); });
+test("fencing never comes from heartbeat expiration alone", () => { const f = fixture(), w = f.add(), e = f.start(w.id); f.cmd({ type: "runtime.event", event: "unknown", execution: e.execution }, f.launcher(e.execution), true); rejects("NOT_READY", () => f.start(w.id)); rejects("STOP_CONFIRMATION_REQUIRED", () => f.cmd({ type: "execution.recover", execution: e.execution, reason: "timeout" })); f.cmd({ type: "execution.recover", execution: e.execution, reason: "stopped externally", stopped: true }); rejects("FENCED_EXECUTION", () => f.cmd({ type: "result.submit", summary: "late", manifest: [] }, f.worker(e.execution))); const retry = f.start(w.id, { continuedFrom: e.execution }); assert.notEqual(retry.execution, e.execution); f.sql.close(); });
 test("context rollover is not a new run or attempt", () => {
     const f = fixture(), w = f.add(), e = f.start(w.id);
     for (const window of ["a", "b", "b"])
-        f.cmd({ type: "runtime.event", event: "window", execution: e.execution, windowId: window, externalSessionId: "session" }, f.collector(e.execution), true);
+        f.cmd({ type: "runtime.event", event: "window", execution: e.execution, windowId: window, externalSessionId: "session" }, f.launcher(e.execution), true);
     assert.equal(Object.keys(f.state().runs).length, 1);
     assert.equal(Object.keys(f.state().executions).length, 1);
     assert.deepEqual(f.state().runs[e.run]!.windows, ["a", "b"]);

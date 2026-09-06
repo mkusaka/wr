@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { Client, syncOutbox, pendingCount } from "./client.js";
-import { connection, context, stateHome, atomic, readJson, type Connection } from "./files.js";
+import { context, stateHome, atomic, readJson, type Connection } from "./files.js";
 import { Fault, demand, uid } from "../domain/util.js";
-import { launch, runtimeEvent } from "../runtime/launcher.js";
+import { launch, runtimeEvent, processIdentity } from "../runtime/launcher.js";
 import { installHooks, hooksStatus, uninstallHooks, gitHook, checkRange, contribute } from "../git/hooks.js";
 import { head, repository } from "../git/repository.js";
 import { textView, workpad, mermaid, type View } from "../projections/views.js";
@@ -16,6 +16,7 @@ import { createPr, syncPr } from "../integrations/github.js";
 import type { State } from "../domain/model.js";
 const help = `wr-next — isolated work coordination and provenance
 
+  authority stop                         Stop the managed local authority
   serve [--port N] [--database PATH]       Local authority (loopback only)
   connect --server URL --workspace KEY --token-file PATH
   add TITLE [--under W] [--needs W1,W2] [--link REF]
@@ -28,6 +29,7 @@ const help = `wr-next — isolated work coordination and provenance
   hold resolve ID --reason TEXT
   cancel W --reason TEXT | reopen W --reason TEXT
   recover EXEC --stopped --reason TEXT    Explicit stopped-process recovery
+  agents [--format mermaid]               Runtime tree, separate from the work DAG
   graph [W] | export [W] [--output FILE]   Generated Mermaid / workpad
   hooks install|status|uninstall          Preserve existing Git hooks
   contribute EXEC [--identity 'Name <email>']
@@ -116,6 +118,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
     }
     if (cmd === "serve") {
+        demand(!context(), "FORBIDDEN", "Managed workers cannot start an authority", 403);
         const { startLocal } = await import("../server/local.js");
         const dir = stateHome();
         mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -123,13 +126,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         const localPrevious = previous && new URL(previous.server).hostname === "127.0.0.1" ? previous : null;
         const secret = localPrevious?.token ?? randomBytes(32).toString("hex"), ws = opt(a, "workspace") ?? "local";
         const server = await startLocal({ database: opt(a, "database") ?? join(dir, "workspace.sqlite"), secret, workspace: ws, port: Number(opt(a, "port") ?? 47832) });
-        atomic(cfgPath, { server: server.url, workspace: ws, device: localPrevious?.device ?? uid("device"), token: secret });
+        atomic(cfgPath, { server: server.url, workspace: ws, device: localPrevious?.device ?? uid("device"), token: secret, localAuthority: { database: resolve(opt(a, "database") ?? join(dir, "workspace.sqlite")), pid: process.pid, processIdentity: processIdentity(process.pid) } });
         console.log(`wr-next listening on ${server.url} (credentials saved privately)`);
         await new Promise<void>(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve); });
         await server.close();
         return 0;
     }
     if (cmd === "connect") {
+        demand(!context(), "FORBIDDEN", "Managed workers cannot change the authority connection", 403);
         const server = required(a, "server"), url = new URL(server);
         demand(url.protocol === "https:" || url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname), "UNSAFE_SERVER", "Remote authority must use HTTPS");
         atomic(join(stateHome(), "connection.json"), { server, workspace: required(a, "workspace"), device: uid("device"), token: readFileSync(required(a, "token-file"), "utf8").trim() });
@@ -161,7 +165,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         json(r);
         return r.commits.every(c => c.tracked) ? 0 : 2;
     }
-    const cfg = connection(), client = new Client(cfg);
+    if (cmd === "authority") {
+        demand(sub === "stop", "INVALID_ARGUMENT", "Use authority stop", 400);
+        const { stopLocalAuthority } = await import("./authority.js");
+        await stopLocalAuthority();
+        console.log("Local authority stopped");
+        return 0;
+    }
+    const known = new Set(["add", "plan", "run", "status", "report", "done", "hold", "cancel", "reopen", "recover", "graph", "export", "hooks", "contribute", "provenance", "verify", "pr", "explain", "import", "shadow", "cutover", "rollback", "doctor", "agents"]);
+    demand(known.has(cmd), "INVALID_ARGUMENT", `Unknown command ${cmd}; run --help`, 400);
+    const { ensureConnection } = await import("./authority.js");
+    const cfg = await ensureConnection(), client = new Client(cfg);
     if (cmd === "run") {
         demand(sub, "INVALID_ARGUMENT", "Select work");
         demand(["generic", "claude"].includes(opt(a, "runtime") ?? "generic"), "UNSUPPORTED_RUNTIME", "Supported adapter kinds: generic, claude", 400);
@@ -310,6 +324,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (cmd === "cutover" || cmd === "rollback") {
         json(await client.command({ type: "migration.mode", source: sub, mode: cmd === "cutover" ? "next" : "legacy", confirm: required(a, "confirm"), comparison: cmd === "cutover" ? readJson(required(a, "comparison")) : undefined }));
+        return 0;
+    }
+    if (cmd === "agents") {
+        const format = opt(a, "format") ?? "json";
+        demand(format === "json" || format === "mermaid", "INVALID_ARGUMENT", "agents supports json or mermaid", 400);
+        const graph = await client.request<import("../projections/runtime.js").RuntimeView>("/v1/runtime");
+        if (format === "mermaid") {
+            const { runtimeMermaid } = await import("../projections/runtime.js");
+            console.log(runtimeMermaid(graph));
+        }
+        else
+            json(graph);
         return 0;
     }
     if (cmd === "doctor") {

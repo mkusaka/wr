@@ -3,6 +3,8 @@ import { Fault, demand } from "../domain/util.js";
 import { envelope, object, text, list } from "../protocol/validate.js";
 import { Workspace } from "../domain/service.js";
 import { Tokens } from "./auth.js";
+import { boundExecution, adapterAgent, executionView, freshExecution } from "../domain/runtime.js";
+import { runtimeView, runtimeMermaid } from "../projections/runtime.js";
 import { view, explainCommit, explainPr } from "../projections/views.js";
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 export function application(workspace: Workspace, tokens: Tokens, authenticate: (r: Request) => Principal | Promise<Principal>) {
@@ -35,22 +37,37 @@ export function application(workspace: Workspace, tokens: Tokens, authenticate: 
                     const x = object(parsed, ["execution", "checks"]), execution = x.execution === undefined ? undefined : text(x.execution, "execution");
                     if (execution)
                         demand(workspace.store.snapshot().executions[execution], "NOT_FOUND", "Execution not found", 404);
-                    return json({ token: tokens.mint({ ...p, role: "collector", execution, checks: list(x.checks ?? [], x => text(x, "check")) }) });
+                    return json({ token: tokens.mint({ ...p, role: "collector", execution, ...(execution ? { generation: workspace.store.snapshot().executions[execution]!.generation } : {}), checks: list(x.checks ?? [], x => text(x, "check")) }) });
                 }
                 demand(url.pathname === "/v1/commands" || url.pathname === "/v1/observations", "NOT_FOUND", "Route not found", 404);
                 const message = envelope(parsed);
                 const output = workspace.execute(message, p, url.pathname === "/v1/observations") as {
                     result: Record<string, unknown>;
                 };
-                if (message.command.type === "execution.start") {
+                if (["execution.start", "runtime.attach", "runtime.bind", "runtime.credentials", "runtime.child"].includes(message.command.type) && output.result.execution && output.result.generation !== undefined) {
                     const e = output.result.execution as string;
-                    const base = { id: p.id, device: p.device, execution: e };
-                    return json({ ...output, capabilities: { worker: tokens.mint({ ...base, role: "worker" }), launcher: tokens.mint({ ...base, role: "launcher" }), git: tokens.mint({ ...base, role: "collector", checks: ["git:*"] }), github: tokens.mint({ ...base, role: "collector", checks: ["github:*"] }) } });
+                    const s = workspace.store.snapshot(), execution = s.executions[e];
+                    demand(execution && s.runs[execution.run]?.device === p.device && execution.state === "active" && execution.generation === output.result.generation, "FENCED_EXECUTION", "Cached launch cannot refresh a stopped or revoked execution");
+                    freshExecution(s, execution);
+                    const runtimeAgent = output.result.runtimeAgent as string | undefined;
+                    const base = { id: p.id, device: p.device, execution: e, generation: execution.generation, ...(runtimeAgent ? { runtimeAgent } : {}) };
+                    const agent = runtimeAgent ? s.runtimeAgents[runtimeAgent] : undefined;
+                    return json({ ...output, result: executionView(s, e, runtimeAgent), capabilities: { worker: tokens.mint({ ...base, role: "worker" }), launcher: tokens.mint({ ...base, role: "launcher" }), git: tokens.mint({ ...base, role: "collector", checks: ["git:*"] }), github: tokens.mint({ ...base, role: "collector", checks: ["github:*"] }), ...(message.command.type === "runtime.attach" && agent ? { adapter: tokens.mint({ id: p.id, device: p.device, role: "adapter", runtimeRoot: agent.root, generation: s.runtimeAgents[agent.root]!.generation }) } : {}) } });
                 }
                 return json(output);
             }
             demand(request.method === "GET", "METHOD_NOT_ALLOWED", "Method not allowed", 405);
             const state = workspace.store.snapshot();
+            if (p.role === "adapter") {
+                adapterAgent(state, p, p.runtimeRoot ?? "");
+                demand(url.pathname === "/v1/runtime", "FORBIDDEN", "Adapter only reads runtime identity", 403);
+            }
+            else if (p.role !== "operator")
+                boundExecution(state, p);
+            if (url.pathname === "/v1/runtime") {
+                const v = runtimeView(state, p);
+                return url.searchParams.get("format") === "mermaid" ? new Response(runtimeMermaid(v), { headers: { "content-type": "text/plain", "cache-control": "no-store" } }) : json(v);
+            }
             if (url.pathname === "/v1/status" || url.pathname === "/v1/graph") {
                 const since = Number(url.searchParams.get("since") ?? 0), offset = Number(url.searchParams.get("offset") ?? 0), limit = Number(url.searchParams.get("limit") ?? 1000);
                 demand(Number.isSafeInteger(since) && since >= 0 && Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit > 0 && limit <= 5000, "INVALID_INPUT", "Invalid pagination", 400);

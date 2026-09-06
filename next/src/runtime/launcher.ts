@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { Client, enqueue, syncOutbox } from "../cli/client.js";
 import { atomic, context, stateHome, readJson, type ContextFile, type Connection } from "../cli/files.js";
-import { uid, demand } from "../domain/util.js";
+import { uid, demand, digest } from "../domain/util.js";
 import { cliPath } from "../git/hooks.js";
+import { claudeChildGuard } from "./claude-guard.js";
 import { git, tryGit } from "../git/repository.js";
 export type LaunchOptions = {
     work: string;
@@ -54,7 +55,7 @@ export async function launch(cfg: Connection, options: LaunchOptions): Promise<{
     const client = new Client(cfg), parent = context();
     let delegationToken: string | undefined;
     if (parent) {
-        const d = await client.command({ type: "delegation.issue", work: options.work, objective: `Delegated work ${options.work}` });
+        const d = await client.command({ type: "delegation.issue", work: options.work, objective: `Delegated work ${options.work}`, role: options.role ?? "implementer", mode: options.readOnly ? "read" : "write" });
         delegationToken = d.result.token;
     }
     const start = await client.command<StartResponse>({ type: "execution.start", work: options.work, launchId, environment, runtime: options.runtime ?? "generic", role: options.role ?? "implementer", mode: options.readOnly ? "read" : "write", continuedFrom: options.continuedFrom, session: options.session, delegationToken }, { id: launchId });
@@ -67,12 +68,12 @@ export async function launch(cfg: Connection, options: LaunchOptions): Promise<{
     mkdirSync(bin, { mode: 0o700 });
     writeFileSync(join(bin, "wr-next"), `#!/bin/sh\nexec ${q(process.execPath)} ${q(cliPath())} "$@"\n`, { mode: 0o700 });
     const childEnv = { ...process.env, WR_NEXT_CONTEXT: ctxPath, PATH: `${bin}:${process.env.PATH ?? ""}` };
-    for (const key of ["WR_NEXT_TOKEN", "WR_NEXT_SERVER", "WR_NEXT_RUNTIME_CONNECTION", "WR_SESSION_RUN_ID", "WR_CLI_SESSION", "WR_EXECUTION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "DEVIN_SESSION_ID", "PI_SESSION_ID"])
+    for (const key of ["WR_NEXT_BINDING_REQUIRED", "WR_NEXT_RUNTIME_AGENT", "WR_NEXT_TOKEN", "WR_NEXT_SERVER", "WR_NEXT_RUNTIME_CONNECTION", "WR_SESSION_RUN_ID", "WR_CLI_SESSION", "WR_EXECUTION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "DEVIN_SESSION_ID", "PI_SESSION_ID"])
         delete (childEnv as NodeJS.ProcessEnv)[key];
     let argv = [...options.argv];
     if (options.runtime === "claude") {
         const eventCommand = `${q(process.execPath)} ${q(cliPath())} internal runtime-event`;
-        const settings = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: eventCommand }] }], SessionEnd: [{ hooks: [{ type: "command", command: eventCommand }] }], PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: eventCommand, async: true }] }] } };
+        const settings = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: eventCommand }] }], SubagentStart: [{ hooks: [{ type: "command", command: eventCommand }] }], SubagentStop: [{ hooks: [{ type: "command", command: eventCommand }] }], SessionStart: [{ hooks: [{ type: "command", command: eventCommand }] }], SessionEnd: [{ hooks: [{ type: "command", command: eventCommand }] }], PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: eventCommand, async: true }] }] } };
         const path = join(dir, "claude-settings.json");
         atomic(path, settings);
         argv = [argv[0]!, "--settings", path, ...argv.slice(1)];
@@ -121,9 +122,11 @@ export async function launch(cfg: Connection, options: LaunchOptions): Promise<{
 }
 export function processIdentity(pid: number): string | null {
     try {
-        if (process.platform === "linux")
-            return readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /, "").split(" ")[19] ?? null;
-        const p = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" });
+        if (process.platform === "linux") {
+            const fields = readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /, "").split(" ");
+            return fields[0] === "Z" || fields[0] === "X" ? null : fields[19] ?? null;
+        }
+        const p = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
         return p.status === 0 ? p.stdout.trim() : null;
     }
     catch {
@@ -131,6 +134,19 @@ export function processIdentity(pid: number): string | null {
     }
 }
 export async function runtimeEvent(input: string): Promise<void> {
+    // Check the runtime-provided actor before touching an inherited context or
+    // any parent capability. A missing/corrupt context must not turn this into allow.
+    const parsed = JSON.parse(input) as {
+        hook_event_name?: string;
+        agent_id?: unknown;
+        tool_name?: string;
+    };
+    const guard = claudeChildGuard(parsed);
+    if (guard) {
+        if (Object.keys(guard).length)
+            console.log(JSON.stringify(guard));
+        return;
+    }
     const file = process.env.WR_NEXT_RUNTIME_CONNECTION;
     const ctx = context();
     if (!file || !ctx)
@@ -147,6 +163,16 @@ export async function runtimeEvent(input: string): Promise<void> {
         tool_response?: unknown;
     };
     if (payload.hook_event_name === "SessionStart") {
+        if (payload.session_id) {
+            try {
+                // The root is explicitly observed by this wrapper. This does NOT bind
+                // native children or grant the model a root-adapter capability.
+                await new Client(conn).command({ type: "runtime.attach", runtime: "claude", externalSessionId: payload.session_id, agentId: "main", invocationId: ctx.run }, { id: digest({ type: "wrapper-root", run: ctx.run, session: payload.session_id }), queue: true });
+            }
+            catch {
+                console.error("wr-next: root runtime attachment pending or rejected; no native child binding was inferred");
+            }
+        }
         const event = payload.source === "compact" ? "window" : "started";
         enqueue(conn, "/v1/observations", { schemaVersion: 1, operationId: uid("runtimeop"), command: { type: "runtime.event", execution: ctx.execution, event, externalSessionId: payload.session_id, windowId: event === "window" ? uid("window") : undefined } });
         let guidance = `You are working on ${ctx.key}. Use wr-next status to read current requirements and state. Use wr-next report for decisions/blockers; wr-next done --summary to submit. Submission is not unconditional acceptance. Do not repeat external actions based only on old handoff prose. Context-window rollover continues the same Execution.`;

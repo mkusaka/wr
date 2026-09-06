@@ -28,6 +28,11 @@ export function atomic(path: string, value: unknown): void {
 }
 export function readJson<T>(path: string): T { return JSON.parse(readFileSync(path, "utf8")) as T; }
 export type Connection = {
+    localAuthority?: {
+        database: string;
+        pid: number;
+        processIdentity: string | null;
+    };
     server: string;
     workspace: string;
     device: string;
@@ -46,14 +51,21 @@ export type ContextFile = Connection & {
     contributors: string[];
     launcherToken?: string;
     githubToken?: string;
+    runtimeAgent?: string;
+    runtimeRoot?: string;
 };
 export function context(): ContextFile | null {
     const path = process.env.WR_NEXT_CONTEXT;
-    if (!path)
+    if (!path) {
+        demand(!process.env.WR_NEXT_BINDING_REQUIRED, "UNBOUND_RUNTIME_ACTOR", "Managed runtime tools require an explicitly bound actor context", 403);
         return null;
+    }
     const st = lstatSync(path);
     demand(st.isFile() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && (!process.getuid || st.uid === process.getuid()), "UNSAFE_CONTEXT", "Context must be an owner-only regular file");
-    return readJson<ContextFile>(path);
+    const value = readJson<ContextFile>(path);
+    if (process.env.WR_NEXT_BINDING_REQUIRED || value.runtimeAgent)
+        demand(value.runtimeAgent && process.env.WR_NEXT_RUNTIME_AGENT === value.runtimeAgent, "UNBOUND_RUNTIME_ACTOR", "An inherited context is not a runtime actor binding", 403);
+    return value;
 }
 export function connection(): Connection {
     const ctx = context();

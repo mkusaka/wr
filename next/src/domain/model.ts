@@ -13,9 +13,12 @@ export type ArtifactRef = {
 export type Principal = {
     id: string;
     device: string;
-    role: "operator" | "worker" | "launcher" | "collector";
+    role: "operator" | "worker" | "launcher" | "collector" | "adapter";
     execution?: string;
     checks?: string[];
+    generation?: number;
+    runtimeRoot?: string;
+    runtimeAgent?: string;
 };
 export type Work = {
     id: string;
@@ -58,10 +61,13 @@ export type Session = {
     runtime: string;
     externalId: string;
     device: string;
+    parentSession?: string | null;
 };
 export type Run = {
     id: string;
     session: string | null;
+    parentRun?: string | null;
+    runtimeAgent?: string | null;
     device: string;
     runtime: string;
     state: "active" | "ended" | "unknown";
@@ -83,6 +89,7 @@ export type Execution = {
     environment: string;
     continuedFrom: string | null;
     parent: string | null;
+    delegation?: string | null;
     startedAt: string;
     endedAt: string | null;
 };
@@ -237,6 +244,34 @@ export type Delegation = {
     expiresAt: string;
     claimedBy: string | null;
     objective: string;
+    state?: "issued" | "claimed" | "revoked" | "expired";
+    parentGeneration?: number;
+    parentScopeRevision?: number;
+    workScopeRevision?: number;
+    issuer?: string;
+    device?: string;
+    role?: string;
+    mode?: "read" | "write";
+    runtimeChildId?: string | null;
+    revokedAt?: string | null;
+};
+/** Runtime lineage is independent from work decomposition and delegated work. */
+export type RuntimeAgent = {
+    lastSequence?: number;
+    id: string;
+    root: string;
+    parent: string | null;
+    runtime: string;
+    externalSessionId: string;
+    externalAgentId: string;
+    invocationId: string;
+    device: string;
+    run: string;
+    execution: string | null;
+    state: "active" | "quiescent" | "ended" | "unknown";
+    generation: number;
+    startedAt: string;
+    endedAt: string | null;
 };
 export type Source = {
     id: string;
@@ -286,8 +321,9 @@ export type Rows = {
     effects: Effect;
     devices: Device;
     lanes: Lane;
+    runtimeAgents: RuntimeAgent;
 };
-export const tables = ["work", "dependencies", "sessions", "runs", "executions", "reservations", "holds", "results", "checks", "acceptances", "events", "contexts", "artifacts", "contributions", "rewrites", "prs", "delegations", "sources", "effects", "devices", "lanes"] as const;
+export const tables = ["work", "dependencies", "sessions", "runs", "executions", "reservations", "holds", "results", "checks", "acceptances", "events", "contexts", "artifacts", "contributions", "rewrites", "prs", "delegations", "sources", "effects", "devices", "lanes", "runtimeAgents"] as const;
 export type State = {
     [K in keyof Rows]: Record<string, Rows[K]>;
 } & {
