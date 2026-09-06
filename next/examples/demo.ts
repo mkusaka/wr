@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startLocal } from "../src/server/local.js";
 import { Client } from "../src/cli/client.js";
-import { launch } from "../src/runtime/launcher.js";
+import { runWork as launch } from "../src/cli/run.js";
 import { workpad, mermaid, type View } from "../src/projections/views.js";
 const directory = mkdtempSync(join(tmpdir(), "wr-next-demo-"));
 const previous = process.env.WR_NEXT_HOME;

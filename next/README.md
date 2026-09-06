@@ -10,7 +10,7 @@ An isolated successor to `wr`. People and agents manage **work**, not session ID
 - Deterministic status, workpad and Mermaid projections; no LLM calls to generate views.
 - A read-only checklist importer, shadow comparisons, and explicit scope authority transitions.
 
-**Status:** implementation and local tests are available. Real provider calls, actual workerd execution and production dogfood must be validated separately; see [verification](docs/verification.md). This does not replace an installed `wr`, deploy a Worker, migrate old D1 data, or modify old hook configuration automatically.
+**Status:** implementation, local Bun tests and real workerd execution are available. Live provider calls, live GitHub synchronization and production dogfood remain separate acceptance gates; see [verification](docs/verification.md). This does not replace an installed `wr`, deploy a Worker, migrate old D1 data, or modify old hook configuration automatically.
 
 ## Install and verify
 
@@ -27,17 +27,29 @@ bun run verify
 
 An explicit package install or symlink can expose `bin/wr-next` on PATH. Nothing installs over `wr`.
 
-## Start a local authority
-
-In terminal A:
+## Initialize the repository once
 
 ```sh
-./bin/wr-next serve
+wr-next init --dry-run
+wr-next init
+wr-next integrations
 ```
 
-The server listens only on loopback, creates an owner-private SQLite database and writes a random local credential to `~/.local/state/wr-next/connection.json`. `WR_NEXT_HOME` selects an isolated state directory. Every participating local CLI must use the same setting.
+`init` detects installed executables/existing runtime directories without executing them. Select runtimes explicitly with `--runtime claude,codex,omp` (or `all`). Runtime-only setup uses `--no-git-hooks`. This is explicit repository opt-in; it never starts an authority, claims work, changes hook trust, or modifies another repository.
 
-In terminal B:
+Static desired configuration lives in `.wr/config.json`. Only wr-next's own entries are merged into `.claude/settings.json` / `.codex/hooks.json`; OMP gets `.omp/extensions/wr-next.ts`. Existing settings/hooks are preserved. Codex `config.toml` is not rewritten. Review project and exact-hook trust in Codex `/hooks`; restart runtimes after changing integration settings.
+
+```sh
+wr-next integrations install codex
+wr-next integrations sync
+wr-next integrations uninstall codex
+```
+
+Installation, actual loading/trust, and native subagent binding are separate statuses. `init` does not claim all three are ready. See [repository integrations](docs/repository-integrations.md) for worktree handling, conflict recovery, and runtime limitations.
+
+## Start work
+
+The existing local authority manager starts/reuses a private loopback authority on the first operator command. `WR_NEXT_HOME` selects the wr-next state directory. Every local client must use the same setting. Remote profiles remain remote; a connection failure does not create a different local authority.
 
 ```sh
 wr-next add "Improve the API"
@@ -48,17 +60,24 @@ wr-next add "Independent review" --under W1 --needs W2
 # W3
 wr-next status W1
 wr-next graph W1
+
+wr-next run W2 -- claude
+# Or: wr-next run W2 -- codex / omp / devin
 ```
 
-Use an independent worktree for each concurrent writer. Worktree creation is explicit:
+`run` infers the adapter from an exact executable basename (`claude`, `codex`, `omp`, `devin`). Custom wrappers can use `--runtime NAME`. It binds work, reserves the environment, creates Run/Execution, and injects private per-process context. Normal launches do **not** rewrite project files or add `--settings`.
+
+Claude and Codex use their permanent project hooks; OMP uses its native extension. The adapters cover root lifecycle/startup guidance and targeted PR observations. Native child work still needs the trusted per-tool harness dispatcher; unsupported managed spawning is denied, not attributed to the parent. Devin is wrapper-only. Generic explicit subprocess execution remains available with `--runtime generic`; that opt-in does not claim native lifecycle capture.
+
+OMP project extension discovery is cwd-local: launch from the initialized worktree root. Git worktrees have their own files; commit the shared static configuration or initialize each worktree explicitly. `run --worktree NEW_PATH` does not copy/overwrite integration files. If the new checkout lacks them, initialize it and then run from there; no work is claimed until preflight succeeds.
+
+Explicit ephemeral Claude settings remain available for CI/testing:
 
 ```sh
-wr-next run W2 --worktree ../api-worker --runtime claude -- claude
+wr-next run W2 --runtime claude --isolated -- claude
 ```
 
-Without `--worktree`, `run` uses the current directory. It reserves the work and environment, injects a child-specific context, starts the process, and records its exit. It never treats exit zero as task completion.
-
-`--runtime generic` works with arbitrary explicit subprocess commands, including an installed Codex or other CLI, but does not claim native session/rollover integration. `--runtime claude` additionally installs per-launch SessionStart/SessionEnd/PostToolUse settings. Native Claude compatibility is contract-tested; live validation is opt-in. No permission-bypass flags are added.
+`--isolated` means isolated wr-next hook configuration, **not** an OS sandbox or a bypass of existing runtime settings/trust. Isolated Codex/OMP configuration is not implemented. No permission-bypass flag is added.
 
 Inside a managed worker:
 
@@ -82,6 +101,14 @@ wr-next verify W2 --check tests -- bun test
 
 A successful check of a different SHA cannot complete this result. For a separate review work item, complete implementation at W2, then review W3; put the combined completion condition on the parent rather than creating a circular wait.
 
+## Generic binder and native attachment
+
+The normal `run` command composes worktree/integration preflight with a runtime-neutral binder. The binder only claims, issues context, spawns the exact prepared argv, and observes its direct child. It does not generate Claude/Codex/OMP configuration. The explicit Claude `--isolated` testing profile is prepared separately.
+
+New runs use one private execution context; the duplicate lifecycle connection file is no longer generated. The same context issuer and bounded resume view are available to trusted native harnesses through `NativeRuntimeBridge`. Native-child assignment is not implied by installing project hooks.
+
+A wrapperless harness can call `NativeRuntimeBridge.attach` with real session/actor/invocation identity, then `resumeContext` and `toolEnvironment`. There is no general session-ID-only CLI attach: without runtime cooperation that could bind the wrong resumed process or child. See [generic binder design](docs/generic-binder.md) for that boundary, normalized event semantics, and process-stop limitations.
+
 ## Planning and concurrency
 
 ```sh
@@ -103,7 +130,7 @@ Dependency and parent-aggregation cycles are rejected together. Cancel is not su
 
 ## Git provenance
 
-Opt in from each repository:
+`init` installs Git hooks unless `--no-git-hooks` is selected. Existing hook-manager configurations require manual integration and are never overwritten. Git capture can also be managed separately:
 
 ```sh
 wr-next hooks install
@@ -150,7 +177,7 @@ wr-next explain pr 123 --repo owner/repo
 
 PR creation uses an authority-side effect claim, a private receipt and an operation marker. After ambiguous output it searches for that marker; it does not blindly create another PR. Concurrent creators cannot claim the same effect twice. `--operation SAFE_ID` selects a new explicit creation operation when intentionally reusing a branch/work association.
 
-A PR head change invalidates the linked work's old candidate acceptance. Current commit membership is replaced; earlier snapshots remain. Reviews/checks are bound to the exact HEAD. Plain synchronization establishes an observer, not a publisher. Native Claude PostToolUse can notice a direct `gh pr create` URL, but only a matching creation receipt establishes agent publication.
+A PR head change invalidates the linked work's old candidate acceptance. Current commit membership is replaced; earlier snapshots remain. Reviews/checks are bound to the exact HEAD. Plain synchronization establishes an observer, not a publisher. Managed Claude/Codex/OMP tool observation can notice a direct `gh pr create` URL, but only a matching creation receipt establishes agent publication. A matching shell command alone never assigns a publisher.
 
 ## Import, shadow, cutover, rollback
 

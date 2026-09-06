@@ -40,6 +40,12 @@ export type Connection = {
     accessToken?: string;
 };
 export type ContextFile = Connection & {
+    integration?: {
+        runtime: string;
+        mode: "project" | "isolated";
+        adapterVersion: number;
+        root: string;
+    };
     work: string;
     key: string;
     execution: string;

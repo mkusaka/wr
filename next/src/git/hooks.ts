@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, chmodSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { cliPath } from "../cli/entrypoint.js";
+export { cliPath } from "../cli/entrypoint.js";
 import { atomic, context, readJson, type ContextFile } from "../cli/files.js";
 import { enqueue, syncOutbox } from "../cli/client.js";
 import { git, gitPath, head, repository, readCommit, trailers, tryGit } from "./repository.js";
@@ -8,7 +9,6 @@ import { digest, demand, uid, now } from "../domain/util.js";
 import type { CommitSnapshot } from "../domain/model.js";
 const names = ["prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite", "pre-push"];
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
-export const cliPath = (): string => fileURLToPath(new URL("../cli/main.js", import.meta.url));
 type HookManifest = {
     files: {
         name: string;

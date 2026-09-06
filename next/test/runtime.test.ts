@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { startLocal } from "../src/server/local.js";
 import { Client, enqueue, syncOutbox, pendingCount } from "../src/cli/client.js";
 import { atomic, type Connection } from "../src/cli/files.js";
-import { launch } from "../src/runtime/launcher.js";
+import { runWork as launch } from "../src/cli/run.js";
 import { uid } from "../src/domain/util.js";
 const cli = resolve("dist/src/cli/main.js");
 function run(args: string[], env = process.env): Promise<{
@@ -150,7 +150,7 @@ if(first.status)throw new Error(first.stderr);writeFileSync(${JSON.stringify(cap
 const compact=spawnSync('/bin/sh',['-c',hook],{encoding:'utf8',input:JSON.stringify({hook_event_name:'SessionStart',session_id:'session-contract',source:'compact'})});if(compact.status)throw new Error(compact.stderr);
 const r=spawnSync('wr-next',['done','--summary','contract output'],{stdio:'inherit'});process.exitCode=r.status??1;
 `, { mode: 0o700 });
-        const result = await launch(f.cfg, { work: w.result.id, argv: [fake], runtime: "claude", cwd: f.home, session: "session-contract" });
+        const result = await launch(f.cfg, { work: w.result.id, argv: [fake], runtime: "claude", isolated: true, cwd: f.home, session: "session-contract" });
         assert.equal(result.exitCode, 0);
         const s = f.server.workspace.store.snapshot();
         assert.equal(Object.keys(s.runs).length, 1);

@@ -1,8 +1,12 @@
 import { join, resolve, dirname } from "node:path";
 import { lstatSync } from "node:fs";
 import { Client } from "../cli/client.js";
-import { atomic, readJson, stateHome, type Connection, type ContextFile } from "../cli/files.js";
+import { atomic, readJson, stateHome, type Connection } from "../cli/files.js";
 import { demand, digest, uid } from "../domain/util.js";
+import { capabilityConnection, writeExecutionContext, type ExecutionBinding, type WorkCapabilities } from "./binding.js";
+import { resumeGuidance } from "./guidance.js";
+import { unboundToolEnvironment } from "./environment.js";
+export { unboundToolEnvironment } from "./environment.js";
 /** Supplied by the harness, never inferred from cwd, prompt text, or the latest child. */
 export type NativeIdentity = {
     externalSessionId: string;
@@ -17,24 +21,13 @@ export type NativeRoot = NativeIdentity & {
     mode?: "read" | "write";
     continuedFrom?: string;
 };
-type Binding = {
-    execution: string;
-    run: string;
-    work: string;
-    key: string;
-    scopeRevision: number;
-    generation: number;
-    environment: string;
+type Binding = ExecutionBinding & {
     runtimeAgent: string;
     runtimeRoot: string;
 };
 type BoundResponse = {
     result: Binding;
-    capabilities: {
-        worker: string;
-        launcher: string;
-        git: string;
-        github: string;
+    capabilities: WorkCapabilities & {
         adapter?: string;
     };
 };
@@ -57,7 +50,7 @@ export class NativeRuntimeBridge {
     static async attach(cfg: Connection, root: NativeRoot, operationId: string, directory = join(stateHome(), "native")): Promise<NativeRuntimeBridge> {
         const response = await new Client(cfg).command<BoundResponse>({ type: "runtime.attach", ...root }, { id: operationId });
         demand(response.capabilities.adapter, "UNBOUND_RUNTIME_ACTOR", "Runtime root did not receive adapter authority");
-        const adapterCfg = { ...cfg, ...transport(cfg), token: response.capabilities.adapter };
+        const adapterCfg = capabilityConnection(cfg, response.capabilities.adapter);
         const bridge = new NativeRuntimeBridge(adapterCfg, response.result.runtimeRoot, resolve(directory));
         // A separate private broker receipt is not a worker context. It can be explicitly
         // reopened by the same harness after a broker crash without starting another Run.
@@ -108,28 +101,21 @@ export class NativeRuntimeBridge {
         // reports ended. No descendant is ended by a parent's observation.
         await this.client.command({ type: "runtime.lifecycle", agent, event, ...details }, { id: eventId, observed: true, queue: true });
     }
+    async resumeContext(agent: string): Promise<string> {
+        const response = await this.client.command<BoundResponse>({ type: "runtime.credentials", agent });
+        const binding = response.result;
+        demand(binding.runtimeAgent === agent && binding.runtimeRoot === this.root, "RUNTIME_BINDING_CONFLICT", "Authority returned another runtime identity");
+        return resumeGuidance({ ...capabilityConnection(this.cfg, response.capabilities.worker), work: binding.work, key: binding.key, scopeRevision: binding.scopeRevision });
+    }
     async toolEnvironment(agent: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
         const env = unboundToolEnvironment(base);
         const response = await this.client.command<BoundResponse>({ type: "runtime.credentials", agent });
         const binding = response.result;
         demand(binding.runtimeAgent === agent && binding.runtimeRoot === this.root, "RUNTIME_BINDING_CONFLICT", "Authority returned another runtime identity");
         const path = join(this.directory, this.root, "contexts", digest(agent), `${uid("tool")}.json`);
-        const ctx: ContextFile = { ...this.cfg, ...binding, token: response.capabilities.worker, gitToken: response.capabilities.git, launcherToken: response.capabilities.launcher, githubToken: response.capabilities.github, contributors: [] };
-        atomic(path, ctx);
+        writeExecutionContext(path, this.cfg, binding, response.capabilities);
         // No operator credential, parent context, global current-work state, or broker
         // capability is passed to the subprocess. Each tool gets an immutable context file.
         return { ...env, WR_NEXT_CONTEXT: path, WR_NEXT_RUNTIME_AGENT: agent };
     }
-}
-function transport(cfg: Connection): Partial<Connection> {
-    return !cfg.accessToken && !cfg.token.startsWith("wn1.") && cfg.token.split(".").length === 3 ? { accessToken: cfg.token } : {};
-}
-/** The harness MUST use this for any native tool lacking a verified work assignment. */
-export function unboundToolEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    const env = { ...base };
-    for (const key of Object.keys(env))
-        if (key.startsWith("WR_NEXT_") && key !== "WR_NEXT_HOME" || ["WR_SESSION_RUN_ID", "WR_CLI_SESSION", "WR_EXECUTION_ID", "WR_PARENT_CLI_SESSION"].includes(key))
-            delete env[key];
-    env.WR_NEXT_BINDING_REQUIRED = "1";
-    return env;
 }

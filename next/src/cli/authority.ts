@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { context, connection, stateHome, readJson, atomic, type Connection } from "./files.js";
-import { cliPath } from "../git/hooks.js";
-import { processIdentity } from "../runtime/launcher.js";
+import { cliPath } from "./entrypoint.js";
+import { processIdentity } from "../runtime/process.js";
 import { demand, Fault } from "../domain/util.js";
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function local(cfg: Connection): boolean {

@@ -7,21 +7,27 @@ import { randomBytes } from "node:crypto";
 import { Client, syncOutbox, pendingCount } from "./client.js";
 import { context, stateHome, atomic, readJson, type Connection } from "./files.js";
 import { Fault, demand, uid } from "../domain/util.js";
-import { launch, runtimeEvent, processIdentity } from "../runtime/launcher.js";
+import { runWork } from "./run.js";
+import { processIdentity } from "../runtime/process.js";
+import { runtimeEvent, integrationEvent } from "../integrations/runtime/dispatch.js";
 import { installHooks, hooksStatus, uninstallHooks, gitHook, checkRange, contribute } from "../git/hooks.js";
 import { head, repository } from "../git/repository.js";
 import { textView, workpad, mermaid, type View } from "../projections/views.js";
 import { parseChecklist, legacyReadiness } from "../importers/checklist.js";
 import { createPr, syncPr } from "../integrations/github.js";
 import type { State } from "../domain/model.js";
+import { syncIntegrations, integrationStatus, projectRoot, readProjectConfig, detectedRuntimes, recoverIntegrations } from "../integrations/runtime-config/project.js";
+import { runtimeNames, type RuntimeName } from "../integrations/runtime-config/catalog.js";
 const help = `wr-next — isolated work coordination and provenance
 
+  init [--runtime claude,codex,omp] [--dry-run] [--no-git-hooks]
+  integrations [status|sync|install RUNTIME|uninstall RUNTIME|recover]
   authority stop                         Stop the managed local authority
   serve [--port N] [--database PATH]       Local authority (loopback only)
   connect --server URL --workspace KEY --token-file PATH
   add TITLE [--under W] [--needs W1,W2] [--link REF]
   plan --file FILE                        Atomic typed plan changes
-  run W [--runtime generic|claude] [--read-only] [--role ROLE] -- COMMAND...
+  run W [--runtime generic|claude|codex|omp|devin] [--isolated] [--read-only] [--role ROLE] -- COMMAND...
   status [W] [--format json] [--since CURSOR]
   report [W] --decision TEXT [--reason TEXT]
   report [W] --blocked TEXT | --progress TEXT
@@ -53,8 +59,8 @@ type Args = {
 };
 function args(argv: string[]): Args {
     const out: Args = { pos: [], opts: {}, tail: [] };
-    const booleans = new Set(["read-only", "apply", "stopped", "json", "help", "replan"]);
-    const valued = new Set(["port", "database", "workspace", "server", "token-file", "under", "needs", "link", "description", "lane", "checks", "file", "runtime", "role", "continue", "session", "worktree", "since", "offset", "format", "output", "decision", "reason", "blocked", "progress", "summary", "check", "repo", "title", "body-file", "base", "operation", "source", "confirm", "comparison", "identity"]);
+    const booleans = new Set(["read-only", "apply", "stopped", "json", "help", "replan", "dry-run", "no-git-hooks", "isolated"]);
+    const valued = new Set(["port", "database", "workspace", "server", "token-file", "under", "needs", "link", "description", "lane", "checks", "file", "runtime", "role", "continue", "session", "worktree", "since", "offset", "format", "output", "decision", "reason", "blocked", "progress", "summary", "check", "repo", "title", "body-file", "base", "operation", "source", "confirm", "comparison", "identity", "adapter-version", "installation", "event"]);
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i]!;
         if (a === "--") {
@@ -101,14 +107,89 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.log(help);
         return 0;
     }
+    if (cmd === "internal" && sub === "integration-event") {
+        try {
+            await integrationEvent(await stdin(), required(a, "source"), required(a, "adapter-version"), required(a, "installation"), required(a, "event"));
+        }
+        catch (error) {
+            console.error(`wr-next integration: ${error instanceof Error ? error.message : "failed"}`);
+            // Codex and Claude both recognize exit 2 as denial for PreToolUse.
+            // Notification hooks never report a successful observation after failure.
+            return opt(a, "event") === "PreToolUse" ? 2 : 0;
+        }
+        return 0;
+    }
+    if (cmd === "init" || cmd === "integrations") {
+        const action = cmd === "init" ? "init" : sub ?? "status";
+        demand(["init", "status", "sync", "install", "uninstall", "recover"].includes(action), "INVALID_ARGUMENT", "Unknown integrations action", 400);
+        if (action === "status") {
+            const statuses = integrationStatus(process.cwd());
+            json({ runtimes: statuses, note: "Installation is not proof of hook trust/loading. Run-scoped handshakes are recorded privately." });
+            return statuses.some(s => s.installation === "drift") ? 2 : 0;
+        }
+        demand(!context(), "FORBIDDEN", "Managed workers cannot change runtime installation", 403);
+        if (action === "recover") {
+            recoverIntegrations(process.cwd());
+            json({ recovered: true });
+            return 0;
+        }
+        const root = projectRoot(process.cwd());
+        const parseRuntimes = (value: string) => {
+            const selected = value === "all" ? [...runtimeNames] : value.split(",");
+            demand(selected.length > 0 && selected.every(r => runtimeNames.includes(r as RuntimeName)), "INVALID_ARGUMENT", "Select claude,codex,omp,devin or all", 400);
+            return [...new Set(selected)] as RuntimeName[];
+        };
+        let selected: RuntimeName[] | undefined;
+        if (action === "init")
+            selected = opt(a, "runtime") ? parseRuntimes(opt(a, "runtime")!) : readProjectConfig(root) ? undefined : detectedRuntimes(root);
+        if (action === "install" || action === "uninstall") {
+            demand(a.pos[2], "INVALID_ARGUMENT", "Runtime required", 400);
+            selected = parseRuntimes(a.pos[2]!);
+        }
+        const result = syncIntegrations(root, { runtimes: action === "uninstall" ? undefined : selected, disable: action === "uninstall" ? selected : undefined, dryRun: Boolean(a.opts["dry-run"]), gitHooks: a.opts["no-git-hooks"] ? false : undefined });
+        let gitHooks: unknown = { state: "not-requested" };
+        if (action === "init" && result.config.gitHooks) {
+            if (a.opts["dry-run"])
+                gitHooks = { state: "planned", note: "Existing core.hooksPath will require manual integration" };
+            else {
+                try {
+                    const installed = installHooks(root) as {
+                        files?: {
+                            intact: boolean;
+                        }[];
+                    };
+                    gitHooks = installed.files?.some(f => !f.intact)
+                        ? { state: "manual-action-required", reason: "Existing wr-next Git hook was edited or removed; it was not overwritten", details: installed }
+                        : installed;
+                }
+                catch (error) {
+                    gitHooks = { state: "manual-action-required", reason: error instanceof Error ? error.message : String(error) };
+                }
+            }
+        }
+        // Runtime config update and Git-hook installation have separate recovery boundaries.
+        json({ ...result, gitHooks });
+        return result.statuses.some(s => s.installation === "drift") || (gitHooks as {
+            state?: string;
+        }).state === "manual-action-required" ? 2 : 0;
+    }
+    if (cmd === "internal" && sub === "runtime-event") {
+        try {
+            await runtimeEvent(await stdin());
+        }
+        catch (error) {
+            console.error(`wr-next legacy runtime hook: ${error instanceof Error ? error.message : "failed"}`);
+            // Legacy hooks can be permission gates too; do not reuse Git's best-effort exit.
+            return 2;
+        }
+        return 0;
+    }
     if (cmd === "internal") {
         try {
             if (sub === "git-hook") {
                 const name = a.pos[2]!;
                 await gitHook(process.cwd(), name, a.pos.slice(3), ["post-rewrite", "pre-push"].includes(name) ? await stdin() : "");
             }
-            else if (sub === "runtime-event")
-                await runtimeEvent(await stdin());
             else
                 throw new Fault("INVALID_ARGUMENT", "Unknown internal command", 400);
         }
@@ -178,8 +259,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     const cfg = await ensureConnection(), client = new Client(cfg);
     if (cmd === "run") {
         demand(sub, "INVALID_ARGUMENT", "Select work");
-        demand(["generic", "claude"].includes(opt(a, "runtime") ?? "generic"), "UNSUPPORTED_RUNTIME", "Supported adapter kinds: generic, claude", 400);
-        const result = await launch(cfg, { work: sub, argv: a.tail, runtime: opt(a, "runtime"), role: opt(a, "role"), readOnly: Boolean(a.opts["read-only"]), continuedFrom: opt(a, "continue"), session: opt(a, "session"), worktree: opt(a, "worktree") });
+        demand(["generic", ...runtimeNames].includes(opt(a, "runtime") ?? "generic"), "UNSUPPORTED_RUNTIME", "Unknown runtime adapter", 400);
+        const result = await runWork(cfg, { work: sub, argv: a.tail, runtime: opt(a, "runtime"), role: opt(a, "role"), readOnly: Boolean(a.opts["read-only"]), continuedFrom: opt(a, "continue"), session: opt(a, "session"), worktree: opt(a, "worktree"), isolated: Boolean(a.opts.isolated) });
         json(result);
         return result.exitCode;
     }

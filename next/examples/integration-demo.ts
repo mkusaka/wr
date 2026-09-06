@@ -9,7 +9,7 @@ import { Client } from "../src/cli/client.js";
 import { atomic } from "../src/cli/files.js";
 import { git, head, repository } from "../src/git/repository.js";
 import { installHooks, uninstallHooks } from "../src/git/hooks.js";
-import { launch } from "../src/runtime/launcher.js";
+import { runWork as launch } from "../src/cli/run.js";
 import { parseChecklist, legacyReadiness } from "../src/importers/checklist.js";
 import { reasons } from "../src/domain/work.js";
 import { mermaid, workpad, type View } from "../src/projections/views.js";
