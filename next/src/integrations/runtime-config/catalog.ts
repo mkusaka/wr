@@ -21,7 +21,7 @@ export type HookGroup = {
 };
 export function groups(runtime: "claude" | "codex"): Record<string, HookGroup> {
     // No approval handler, async handler, trust bypass, or duplicate inline TOML definition.
-    return Object.fromEntries(["SessionStart", "SessionEnd", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"].map(event => [event,
+    return Object.fromEntries(["SessionStart", "SessionEnd", "PreToolUse", "PostToolUse", ...(runtime === "claude" ? ["PostToolUseFailure", "PostToolBatch", "PermissionDenied"] : []), "SubagentStart", "SubagentStop"].map(event => [event,
         { hooks: [{ type: "command", command: `${commands[runtime]} --event ${event}`, timeout: 20 }] },
     ]));
 }

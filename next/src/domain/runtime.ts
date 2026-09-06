@@ -1,14 +1,32 @@
-import type { Execution, Principal, RuntimeAgent, State } from "./model.js";
+import type { Coordinator, Execution, Principal, RuntimeAgent, State } from "./model.js";
 import { demand, digest, equal, now, values } from "./util.js";
 import { dependencyBasis, descendants, emit } from "./work.js";
+import { assertCoordinatorWrite, assertScope, grantFor } from "./coordination.js";
 /** Capability identity and generation are checked even on idempotent replays. */
 export function boundExecution(s: State, p: Principal, active = false): Execution {
     const e = p.execution ? s.executions[p.execution] : undefined;
     demand(e && s.runs[e.run]?.device === p.device, "FORBIDDEN", "Execution is not bound to this device", 403);
     demand(p.generation === undefined || p.generation === e.generation, "FENCED_EXECUTION", "Capability generation was revoked", 403);
+    if (e.coordinator) {
+        const co = s.coordinators[e.coordinator];
+        demand(co && (co.state === "active" || p.role === "collector" && !active), "COORDINATOR_INACTIVE", "Coordinator is not active", 403);
+        const g = grantFor(s, p, co.grant);
+        demand(g.generation === co.grantGeneration, "COORDINATION_REVOKED", "Coordinator grant changed", 403);
+        if (p.dispatch) {
+            const d = s.dispatches[p.dispatch];
+            demand(d?.coordinator === co.id && d.execution === e.id && d.generation === e.generation && (!active || d.state === "open"), "STALE_DISPATCH", "Tool is not assigned to this work epoch", 409);
+        }
+    }
+    for (let cursor: Execution | undefined = e; cursor; cursor = cursor.parent ? s.executions[cursor.parent] : undefined) {
+        const d = cursor.delegation ? s.delegations[cursor.delegation] : undefined;
+        if (d?.coordinatorIssuer) {
+            const issuer = s.coordinators[d.coordinatorIssuer];
+            demand(issuer && grantFor(s, p, issuer.grant).generation === issuer.grantGeneration, "COORDINATION_REVOKED", "Delegation grant changed", 403);
+        }
+    }
     if (p.runtimeAgent) {
         const agent = s.runtimeAgents[p.runtimeAgent];
-        demand(agent?.execution === e.id && agent.run === e.run && agent.device === p.device, "UNBOUND_RUNTIME_ACTOR", "Runtime actor does not own this execution", 403);
+        demand(agent && (agent.execution === e.id || p.role === "collector" && !active && e.coordinator) && agent.run === e.run && agent.device === p.device, "UNBOUND_RUNTIME_ACTOR", "Runtime actor does not own this execution", 403);
         if (active)
             demand(agent.state !== "ended", "FENCED_EXECUTION", "Runtime actor has ended", 403);
     }
@@ -20,7 +38,9 @@ export function freshExecution(s: State, e: Execution): void {
     const w = s.work[e.work];
     demand(w && w.state !== "cancelled" && e.scopeRevision === w.scopeRevision && equal(e.basis, dependencyBasis(s, w)), "STALE_SCOPE", "Execution requirements or prerequisites changed");
 }
-export function requirePlanner(s: State, p: Principal): Execution {
+export function requirePlanner(s: State, p: Principal): Execution | Coordinator {
+    if (p.role === "coordinator")
+        return assertCoordinatorWrite(s, p);
     demand(p.role === "worker", "FORBIDDEN", "Scoped worker planning permission required", 403);
     const e = boundExecution(s, p, true);
     demand(e.role === "orchestrator" && e.mode === "read", "FORBIDDEN", "Only read-only orchestrators may plan within their scope", 403);
@@ -30,7 +50,8 @@ export function requirePlanner(s: State, p: Principal): Execution {
         demand(source.mode === "next" || !descendants(s, source.root).has(e.work), "READ_ONLY_SHADOW", "Imported scope is not the active authority");
     return e;
 }
-export function inPlanningScope(s: State, e: Execution, work: string, includeRoot = false): void {
+export function inPlanningScope(s: State, e: Pick<Execution, "work">, work: string, includeRoot = false): void {
+    assertScope(s, e, work, includeRoot);
     demand((includeRoot || work !== e.work) && descendants(s, e.work).has(work), "FORBIDDEN", "Work is outside the assigned planning scope", 403);
 }
 export function requireUnattempted(s: State, work: string): void {
@@ -44,6 +65,9 @@ export function adapterAgent(s: State, p: Principal, id: string): RuntimeAgent {
     demand(p.role === "adapter" && p.runtimeRoot, "UNAUTHORIZED_OBSERVATION", "Runtime adapter capability required", 403);
     const root = s.runtimeAgents[p.runtimeRoot], agent = s.runtimeAgents[id];
     demand(root && agent && agent.root === root.id && agent.device === p.device && root.device === p.device, "FORBIDDEN", "Runtime actor is outside this adapter root", 403);
+    const co = values(s.coordinators).find(c => c.runtimeAgent === root.id);
+    if (co)
+        demand(grantFor(s, p, co.grant).generation === co.grantGeneration, "COORDINATION_REVOKED", "Runtime adapter grant changed", 403);
     demand(p.generation === root.generation, "FENCED_EXECUTION", "Runtime adapter generation was revoked", 403);
     return agent;
 }

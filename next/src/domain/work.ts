@@ -116,7 +116,7 @@ export function reconcile(s: State, p: Principal): void {
             source: "declared" | "observed" | "derived";
         } | null = null;
         const basis = dependencyBasis(s, w);
-        const eligible = w.state !== "cancelled" && !Object.values(basis).includes("unmet") && !values(s.holds).some(h => h.work === id && !h.resolvedAt);
+        const eligible = !w.collection && w.state !== "cancelled" && !Object.values(basis).includes("unmet") && !values(s.holds).some(h => h.work === id && !h.resolvedAt);
         if (eligible) {
             const children = values(s.work).filter(c => c.parent === id);
             if (w.policy.name === "children-v1") {

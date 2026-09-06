@@ -12,10 +12,10 @@ export class Store {
             const version = sql.all<{
                 version: number;
             }>("SELECT version FROM schema_versions ORDER BY version DESC LIMIT 1")[0]?.version ?? 0;
-            if (version > 2)
+            if (version > 3)
                 throw new Error("Database is newer than this binary");
             if (!version) {
-                for (const table of tables.filter(t => t !== "runtimeAgents"))
+                for (const table of tables.filter(t => !["runtimeAgents", "coordinationGrants", "coordinators", "dispatches"].includes(t)))
                     sql.execute(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL CHECK(json_valid(body)))`);
                 sql.execute("CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)");
                 sql.execute("INSERT INTO metadata VALUES(1, ?)", JSON.stringify(emptyState().meta));
@@ -29,6 +29,12 @@ export class Store {
                 sql.execute("CREATE TABLE runtimeAgents (id TEXT PRIMARY KEY, body TEXT NOT NULL CHECK(json_valid(body)))");
                 sql.execute("CREATE UNIQUE INDEX runtime_agent_identity ON runtimeAgents(json_extract(body,'$.root'),json_extract(body,'$.externalSessionId'),json_extract(body,'$.externalAgentId'),json_extract(body,'$.invocationId'))");
                 sql.execute("INSERT INTO schema_versions VALUES(2)");
+            }
+            if (version < 3) {
+                for (const table of ["coordinationGrants", "coordinators", "dispatches"])
+                    sql.execute(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL CHECK(json_valid(body)))`);
+                sql.execute("CREATE UNIQUE INDEX coordinator_identity ON coordinators(json_extract(body,'$.grant'),json_extract(body,'$.runtimeAgent'))");
+                sql.execute("INSERT INTO schema_versions VALUES(3)");
             }
         });
     }

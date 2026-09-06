@@ -142,7 +142,7 @@ The new tests assert that generic runtime modules cannot import provider integra
 
 The integration demo specifically exercises Git's actual worktree identity through `runWork`; moving environment resolution out of the binder must not silently break commit provenance.
 
-The cumulative change was accepted on Bun 1.4.2 with 182 tests, the local integration proof, and the repository's real workerd smoke test. Live Claude/Codex/OMP hooks and native-harness behavior remain separate acceptance gates.
+The latest cumulative change was accepted on Bun 1.4.2 with 221 tests, the local integration proof, and the repository's real workerd smoke test. Live Claude/Codex/OMP hooks and native-harness behavior remain separate acceptance gates.
 
 ## Primary documentation consulted
 

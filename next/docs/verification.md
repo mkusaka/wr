@@ -4,7 +4,7 @@
 
 - Bun 1.4.2, TypeScript 5.8.3, real local Git and Bun SQLite.
 - `bun ci` completed without lockfile changes.
-- `bun run verify` completed: formatting, strict type checking, safety/architecture lint, 182 tests, the minimal demo and the local integration proof.
+- `bun run verify` completed: formatting, strict type checking, safety/architecture lint, 221 tests, the minimal demo and the local integration proof.
 - `bun run test:workerd` completed against real local workerd, a SQLite-backed Durable Object and the capability gateway.
 - The existing wr CI-equivalent checks completed: format, lint, typecheck, knip, 140 tests, compile and `./dist/wr --help`.
 
@@ -26,6 +26,10 @@ The local integration proof uses real child processes, Git hooks/commits, SQLite
 - Runtime-neutral argv binding, allowlisted single-context issuance, direct-child supervision and correct spawn-failure/exit/signal separation.
 - Permanent Claude/Codex/OMP repository integrations, ownership-aware reconciliation, worktree-local activation checks and fail-closed native guards.
 - Canonical macOS worktree identity and Bun-on-macOS signal-name normalization.
+- Private, repository-scoped Coordinator enrollment with no artificial root Execution or ambient operator fallback.
+- Deterministic ready selection, atomic claim/retry, per-tool WorkDispatch fencing and sequential Work ownership within one Run.
+- Coordinator revocation, process-stop evidence, environment reservation retention, inherited leaf checks and schema-version-3 migration.
+- Plain Claude bootstrap contract through generated permanent hooks; Codex/OMP plain-start bootstrap remains an external implementation gate.
 
 ## Remaining external acceptance gates
 

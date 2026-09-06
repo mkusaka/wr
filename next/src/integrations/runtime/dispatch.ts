@@ -53,8 +53,15 @@ export async function runtimeEvent(input: string): Promise<void> {
 /** Source routing happens before reading ANY parent context or credential. */
 export async function integrationEvent(input: string, source: string, version: string, installation: string, expectedEvent: string): Promise<void> {
     demand(version === String(adapterVersion) && ["claude", "codex", "omp"].includes(source), "UNSUPPORTED_ADAPTER", "Unsupported runtime adapter version", 400);
-    if (!process.env.WR_NEXT_CONTEXT && !process.env.WR_NEXT_BINDING_REQUIRED)
+    if (!process.env.WR_NEXT_CONTEXT && !process.env.WR_NEXT_BINDING_REQUIRED) {
+        if (process.env.WR_NEXT_RUNTIME_KIND && process.env.WR_NEXT_RUNTIME_KIND !== source)
+            return;
+        if (installation === "project") {
+            const { coordinatorHook } = await import("./coordinator-hook.js");
+            await coordinatorHook(input, source, expectedEvent);
+        }
         return;
+    }
     if (process.env.WR_NEXT_RUNTIME_KIND !== source)
         return;
     const adapter = runtimeAdapter(source as HookRuntime), event = adapter.decode(input);

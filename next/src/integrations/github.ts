@@ -34,7 +34,7 @@ export function collectPr(repo: string, number: number): Record<string, unknown>
     return { repo: `github.com/${repo}`, number, url: pr.html_url, title: pr.title, author: pr.user?.login ?? null, head: pr.head.sha, base: pr.base.ref, state: pr.merged_at ? "merged" : pr.state, draft: Boolean(pr.draft), commits, reviews, checks: [...checks.values()], updatedAt: pr.updated_at };
 }
 async function githubClient(cfg: Connection): Promise<Client> {
-    const ctx = context();
+    const ctx = "githubToken" in cfg ? cfg as import("../cli/files.js").ContextFile : context();
     if (ctx?.githubToken)
         return new Client({ ...cfg, token: ctx.githubToken });
     const response = await new Client(cfg).request<{
@@ -66,8 +66,10 @@ export async function createPr(cfg: Connection, options: {
     const marker = `<!-- wr-next:operation:${effectId} -->`, receiptPath = join(stateHome(), "effects", `${effectId}.json`);
     const payload = { repo, head: branch, base: options.base, title: options.title, body: `${options.body}\n\n${marker}` };
     const client = new Client(cfg);
-    await client.command({ type: "effect.prepare", effectId, work, kind: "pr.create", payload }, { id: `prepare-${effectId}` });
-    const resolver = ctx?.launcherToken ? new Client({ ...cfg, token: ctx.launcherToken }) : client;
+    const toolSuffix = ctx?.dispatch ? `-${digest(ctx.dispatch).slice(0, 16)}` : "";
+    await client.command({ type: "effect.prepare", effectId, work, kind: "pr.create", payload }, { id: `prepare-${effectId}${toolSuffix}` });
+    const effectToken = ctx?.effectToken ?? ctx?.launcherToken;
+    const resolver = effectToken ? new Client({ ...cfg, token: effectToken }) : client;
     const stored = await client.request<{
         state: string;
         result: string | null;
@@ -103,6 +105,6 @@ export async function createPr(cfg: Connection, options: {
         receipt = { state: "succeeded", url: urls[0]! };
     }
     atomic(receiptPath, receipt);
-    await resolver.command({ type: "effect.resolve", effectId, state: "succeeded", result: receipt.url }, { id: `resolve-${effectId}`, queue: true });
+    await resolver.command({ type: "effect.resolve", effectId, state: "succeeded", result: receipt.url }, { id: `resolve-${effectId}${toolSuffix}`, queue: true });
     return syncPr(cfg, repo, Number(receipt.url!.split("/").at(-1)), effectId);
 }

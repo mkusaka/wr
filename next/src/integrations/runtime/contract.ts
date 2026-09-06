@@ -1,10 +1,10 @@
 import { demand } from "../../domain/util.js";
 import type { HookRuntime } from "../runtime-config/catalog.js";
-export type HookName = "SessionStart" | "SessionEnd" | "PreToolUse" | "PostToolUse" | "SubagentStart" | "SubagentStop" | "PostCompact";
+export type HookName = "SessionStart" | "SessionEnd" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" | "PermissionDenied" | "SubagentStart" | "SubagentStop" | "PostCompact";
 export type RuntimeEvent = {
     runtime: HookRuntime;
     hook: HookName;
-    kind: "session_started" | "context_compacted" | "session_ended" | "tool_started" | "tool_finished" | "child_started" | "child_quiescent";
+    kind: "session_started" | "context_compacted" | "session_ended" | "tool_started" | "tool_finished" | "tool_batch_finished" | "tool_denied" | "child_started" | "child_quiescent";
     sessionId?: string;
     cwd?: string;
     actorId?: string;
@@ -29,7 +29,7 @@ export type RuntimeAdapter = {
     guard(event: RuntimeEvent): HookDecision | null;
     render(event: RuntimeEvent, decision: HookDecision): Record<string, unknown>;
 };
-const kinds: Record<HookName, RuntimeEvent["kind"]> = { SessionStart: "session_started", SessionEnd: "session_ended", PreToolUse: "tool_started", PostToolUse: "tool_finished", SubagentStart: "child_started", SubagentStop: "child_quiescent", PostCompact: "context_compacted" };
+const kinds: Record<HookName, RuntimeEvent["kind"]> = { SessionStart: "session_started", SessionEnd: "session_ended", PreToolUse: "tool_started", PostToolUse: "tool_finished", PostToolUseFailure: "tool_finished", PostToolBatch: "tool_batch_finished", PermissionDenied: "tool_denied", SubagentStart: "child_started", SubagentStop: "child_quiescent", PostCompact: "context_compacted" };
 /** The three installed profiles share a JSON envelope, not a claim of equal lifecycle semantics. */
 export function commandHookAdapter(runtime: HookRuntime, childTools: readonly string[]): RuntimeAdapter {
     return {
@@ -53,7 +53,7 @@ export function commandHookAdapter(runtime: HookRuntime, childTools: readonly st
                 sessionId: p.session_id ?? undefined, cwd: p.cwd ?? undefined, actorId: p.agent_id ?? undefined,
                 // turn_id is not an event id: a single turn may compact more than once.
                 nativeEventId: p.event_id ?? undefined,
-                ...(["PreToolUse", "PostToolUse"].includes(hook) ? { tool: {
+                ...(["PreToolUse", "PostToolUse", "PostToolUseFailure"].includes(hook) ? { tool: {
                         name: p.tool_name, id: p.tool_use_id, command: p.tool_input?.command,
                         output: typeof response === "string" ? response : typeof out.stdout === "string" ? out.stdout : typeof out.output === "string" ? out.output : "",
                         succeeded: hook === "PostToolUse" && out.is_error !== true && out.success !== false && !(typeof out.exit_code === "number" && out.exit_code !== 0) && !(typeof out.exitCode === "number" && out.exitCode !== 0),

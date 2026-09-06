@@ -1,6 +1,7 @@
 import type { State, Principal, Work } from "../domain/model.js";
 import { demand, values, equal } from "../domain/util.js";
 import { descendants, findWork, reasons, dependencyBasis } from "../domain/work.js";
+import { coordinatorFor, assertScope } from "../domain/coordination.js";
 export type Summary = {
     id: string;
     key: string;
@@ -13,6 +14,11 @@ export type Summary = {
     acceptanceSource: string | null;
 };
 export type View = {
+    assignment?: {
+        work: string;
+        execution: string;
+        scopeRevision: number;
+    } | null;
     context: {
         title: string;
         description: string;
@@ -62,7 +68,12 @@ function summary(s: State, w: Work): Summary {
 }
 export function view(s: State, p: Principal, target?: string, since = 0, limit = 1000, offset = 0): View {
     let root: string | null = target ? findWork(s, target).id : p.execution ? s.executions[p.execution]?.work ?? null : null;
-    if (p.role !== "operator") {
+    if (p.role === "coordinator") {
+        const co = coordinatorFor(s, p);
+        root = root ?? (co.currentExecution ? s.executions[co.currentExecution]!.work : co.work);
+        assertScope(s, co, root);
+    }
+    else if (p.role !== "operator") {
         const e = p.execution ? s.executions[p.execution] : undefined;
         demand(e, "FORBIDDEN", "Bound context required", 403);
         if (root)
@@ -75,11 +86,13 @@ export function view(s: State, p: Principal, target?: string, since = 0, limit =
     const items = all.slice(offset, offset + limit).map(w => summary(s, w));
     const events = values(s.events).filter(e => e.seq > since && (!root || e.work !== null && allowed.has(e.work))).sort((a, b) => a.seq - b.seq);
     const page = events.slice(0, 100);
-    return { context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? (e.payload as Record<string, unknown>).summary : e.type })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
+    const coordinator = p.role === "coordinator" ? coordinatorFor(s, p) : null;
+    const current = coordinator?.currentExecution ? s.executions[coordinator.currentExecution] : null;
+    return { ...(coordinator ? { assignment: current ? { work: s.work[current.work]!.key, execution: current.id, scopeRevision: current.scopeRevision } : null } : {}), context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? (e.payload as Record<string, unknown>).summary : e.type })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
 }
 const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 export function textView(v: View): string {
-    return [`${v.snapshot} · ${v.total} work items`, v.context?.description ?? "", v.context?.truncated ? "Requirements truncated. Retrieve the complete work record before acting." : "", ...v.items.map(i => `${i.key} [${i.state}/${i.availability}] ${clean(i.title)}${i.reasons.length ? ` — ${clean(i.reasons.join(", "))}` : ""}`), v.hasMore ? "More data available; continue with cursor/pagination." : ""].filter(Boolean).join("\n");
+    return [`${v.snapshot} · ${v.total} work items`, v.assignment ? `Assigned: ${v.assignment.work} (scope ${v.assignment.scopeRevision})` : "", v.context?.description ?? "", v.context?.truncated ? "Requirements truncated. Retrieve the complete work record before acting." : "", ...v.items.map(i => `${i.key} [${i.state}/${i.availability}] ${clean(i.title)}${i.reasons.length ? ` — ${clean(i.reasons.join(", "))}` : ""}`), v.hasMore ? "More data available; continue with cursor/pagination." : ""].filter(Boolean).join("\n");
 }
 const escapeLabel = (x: string) => clean(x).replace(/&/g, "#38;").replace(/"/g, "#34;").replace(/</g, "#60;").replace(/>/g, "#62;").replace(/\[/g, "#91;").replace(/\]/g, "#93;").replace(/`/g, "#96;").replace(/\\/g, "#92;");
 export function mermaid(v: View): string {

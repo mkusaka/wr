@@ -12,7 +12,7 @@ test("v1 storage migrates without inventing native lineage or deleting historica
     try {
         sql.execute("CREATE TABLE schema_versions (version INTEGER PRIMARY KEY)");
         sql.execute("INSERT INTO schema_versions VALUES(1)");
-        for (const table of tables.filter(t => t !== "runtimeAgents"))
+        for (const table of tables.filter(t => !["runtimeAgents", "coordinationGrants", "coordinators", "dispatches"].includes(t)))
             sql.execute(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, body TEXT NOT NULL CHECK(json_valid(body)))`);
         sql.execute("CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)");
         sql.execute("INSERT INTO metadata VALUES(1,?)", JSON.stringify(emptyState().meta));
@@ -24,7 +24,7 @@ test("v1 storage migrates without inventing native lineage or deleting historica
         assert.deepEqual(s.snapshot().runtimeAgents, {});
         assert.equal(sql.all<{
             version: number;
-        }>("SELECT MAX(version) AS version FROM schema_versions")[0]!.version, 2);
+        }>("SELECT MAX(version) AS version FROM schema_versions")[0]!.version, 3);
         assert.deepEqual(new Store(sql).snapshot(), s.snapshot(), "reopening migration is idempotent");
     }
     finally {

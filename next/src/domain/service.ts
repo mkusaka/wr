@@ -5,6 +5,7 @@ import { text, optionalText, object, list, choice, integer, flag, refs, command 
 import { findWork, emit, order, descendants, dependencyBasis, reasons, reconcile, subject, requireOperator } from "./work.js";
 import { applyObservation } from "./observations.js";
 import { boundExecution, freshExecution, requirePlanner, inPlanningScope, requireUnattempted, agentKey, adapterAgent, sessionFor, executionView, lifecycle } from "./runtime.js";
+import { coordinatorCommand, coordinatorFor, grantFor, assertScope, assertCoordinatorWrite, coordinationIntent, readyCandidates, coordinatorObserver } from "./coordination.js";
 function policy(value: unknown): Policy {
     if (value === undefined)
         return { name: "declaration-v1", checks: [] };
@@ -44,18 +45,33 @@ export class Workspace {
         return this.store.sql.transaction(() => {
             const before = this.store.load();
             demand(!before.devices[p.device] || before.devices[p.device]!.owner === p.id, "FORBIDDEN", "Device belongs to another principal", 403);
+            if (p.role === "coordinator" || p.role === "coordination-runtime")
+                if (p.role === "coordination-runtime" && ["coordination.stop", "coordination.dispatch.close"].includes(envelope.command.type))
+                    coordinatorObserver(before, p);
+                else
+                    coordinatorFor(before, p);
+            if (p.role === "bootstrap") {
+                const grant = grantFor(before, p);
+                demand(grant.generation === p.generation && envelope.command.type === "coordination.open", "FORBIDDEN", "Bootstrap only opens an approved runtime", 403);
+            }
             if (p.execution && p.role !== "operator" && p.role !== "adapter")
                 boundExecution(before, p);
             if (p.role === "adapter")
                 adapterAgent(before, p, p.runtimeRoot ?? "");
             if (!observed) {
+                if (p.role === "coordination-runtime")
+                    demand(["coordination.dispatch", "coordination.dispatch.close", "coordination.stop", "coordination.window"].includes(envelope.command.type), "FORBIDDEN", "Runtime observer cannot plan, submit or claim", 403);
+                if (p.role === "coordinator")
+                    demand(["work.create", "work.plan", "work.update", "dependency.add", "dependency.remove", "work.claim", "work.yield", "delegation.issue", "delegation.revoke", "coordination.credentials", "coordination.note", "work.cancel", "hold.resolve"].includes(envelope.command.type), "FORBIDDEN", "Coordinator scope does not grant operator or trusted collector permissions", 403);
                 demand(p.role !== "collector", "FORBIDDEN", "Collectors cannot issue work commands", 403);
                 if (p.role === "launcher")
                     demand(["execution.start", "delegation.issue", "runtime.attach", "effect.begin", "effect.resolve"].includes(envelope.command.type), "FORBIDDEN", "Launcher cannot issue worker or planning commands", 403);
+                if (p.role === "effect")
+                    demand(["effect.begin", "effect.resolve"].includes(envelope.command.type), "FORBIDDEN", "Effect capability cannot control processes or work", 403);
                 if (p.role === "adapter")
                     demand(["runtime.child", "runtime.bind", "runtime.credentials"].includes(envelope.command.type), "FORBIDDEN", "Adapter cannot issue work commands", 403);
             }
-            const hash = digest({ command: envelope.command, expectedRevision: envelope.expectedRevision, observed, role: p.role, execution: p.execution, device: p.device, generation: p.generation, checks: p.checks, runtimeRoot: p.runtimeRoot, runtimeAgent: p.runtimeAgent });
+            const hash = digest({ command: envelope.command, expectedRevision: envelope.expectedRevision, observed, role: p.role, execution: p.execution, device: p.device, generation: p.generation, checks: p.checks, runtimeRoot: p.runtimeRoot, runtimeAgent: p.runtimeAgent, grant: p.grant, coordinator: p.coordinator, dispatch: p.dispatch });
             const previous = this.store.sql.all<{
                 request_hash: string;
                 result: string;
@@ -108,6 +124,8 @@ export class Workspace {
     private command(s: State, p: Principal, c: ObjectValue & {
         type: string;
     }): unknown {
+        if (c.type.startsWith("coordination.") || ["work.claim", "work.yield"].includes(c.type))
+            return coordinatorCommand(s, p, c, (state, principal, command) => this.command(state, principal, command));
         const targetIds: unknown[] = [];
         if (["work.update", "work.cancel", "work.reopen", "work.report", "result.submit", "effect.prepare", "execution.start", "delegation.issue"].includes(c.type))
             targetIds.push(c.work ?? (p.execution ? s.executions[p.execution]?.work : undefined));
@@ -130,6 +148,10 @@ export class Workspace {
         switch (c.type) {
             case "work.create": {
                 const planner = p.role === "operator" ? null : requirePlanner(s, p);
+                if (p.role === "coordinator") {
+                    const co = assertCoordinatorWrite(s, p), grant = grantFor(s, p, co.grant);
+                    demand(descendants(s, co.work).size < grant.maxItems, "SCOPE_LIMIT", "Repository task limit reached; review scope before expanding");
+                }
                 if (planner) {
                     c = { ...c, parent: c.parent ?? planner.work };
                     const parentId = findWork(s, text(c.parent, "parent")).id;
@@ -145,7 +167,10 @@ export class Workspace {
                 const parent = c.parent === undefined ? null : findWork(s, text(c.parent, "parent"));
                 if (parent) {
                     // Decomposition must not be an indirect policy/budget escalation.
-                    demand(parent.policy.name !== "evidence-v1" || p.role === "operator" && flag(c.replan), "REPLAN_REQUIRED", "An operator must explicitly replan evidence requirements before decomposition");
+                    const currentGrant = p.role === "coordinator" ? grantFor(s, p, coordinatorFor(s, p).grant) : null;
+                    const originTemplate = parent.policyTemplate ? s.coordinationGrants[parent.policyTemplate] : undefined;
+                    const leafTemplate = currentGrant && originTemplate && originTemplate.repository === currentGrant.repository && originTemplate.work === currentGrant.work && equal(originTemplate.defaultPolicy, currentGrant.defaultPolicy) && equal(parent.policy, currentGrant.defaultPolicy) && !values(s.executions).some(e => e.work === parent.id) && !values(s.results).some(r => r.work === parent.id) && !parent.acceptance;
+                    demand(parent.policy.name !== "evidence-v1" || leafTemplate || p.role === "operator" && flag(c.replan), "REPLAN_REQUIRED", "An operator must explicitly replan evidence requirements before decomposition");
                     if (planner)
                         demand(parent.resources.length === 0, "REPLAN_REQUIRED", "Operator must define child resource inheritance before decomposing resource-bound work");
                     const ownDecomposition = planner?.work === parent.id;
@@ -164,6 +189,13 @@ export class Workspace {
                 }
                 const id = uid("work"), key = `W${s.meta.nextKey++}`, time = now();
                 const w: Work = { id, key, parent: parent?.id ?? null, title: text(c.title, "title", 200), description: c.description === undefined ? "" : text(c.description, "description", 32768, true), state: "open", revision: 1, scopeRevision: 1, policy: policy(c.policy), acceptance: null, links: list(c.links ?? [], x => text(x, "link", 2000)), phase: "", priority: c.priority === undefined ? 0 : integer(c.priority, "priority", -10000, 10000), lane: optionalText(c.lane, "lane") ?? (planner ? parent?.lane ?? null : null), resources: resources(c.resources), candidate: null, createdAt: time, updatedAt: time };
+                if (p.role === "coordinator") {
+                    const co = coordinatorFor(s, p), grant = grantFor(s, p, co.grant);
+                    w.policy = structuredClone(grant.defaultPolicy);
+                    w.policyTemplate = grant.id;
+                    // The budget is operator-owned and cannot be weakened by changing a child.
+                    co.intent = coordinationIntent(s.work[co.work]!);
+                }
                 s.work[id] = w;
                 for (const key of list(c.needs ?? [], x => text(x, "needs")))
                     this.addDependency(s, findWork(s, key).id, id, "accepted");
@@ -197,19 +229,23 @@ export class Workspace {
             }
             case "work.update": {
                 const w = findWork(s, text(c.work, "work"));
+                const onlyDisplay = Object.keys(c).every(k => ["type", "work", "priority", "phase"].includes(k));
                 if (p.role !== "operator") {
                     const planner = requirePlanner(s, p);
                     inPlanningScope(s, planner, w.id);
-                    requireUnattempted(s, w.id);
+                    if (!onlyDisplay)
+                        requireUnattempted(s, w.id);
                     demand(!flag(c.replan) && c.policy === undefined && c.lane === undefined && c.resources === undefined, "FORBIDDEN", "Workers cannot weaken policy, change budgets or authorize replanning", 403);
                 }
-                demand(!values(s.executions).some(e => e.work === w.id && e.state === "active") || flag(c.replan), "REPLAN_REQUIRED", "Active work requires explicit replan");
+                demand(onlyDisplay || !values(s.executions).some(e => e.work === w.id && e.state === "active") || flag(c.replan), "REPLAN_REQUIRED", "Active work requires explicit replan");
                 if (c.title !== undefined)
                     w.title = text(c.title, "title", 200);
                 if (c.description !== undefined)
                     w.description = text(c.description, "description", 32768, true);
-                if (c.policy !== undefined)
+                if (c.policy !== undefined) {
                     w.policy = policy(c.policy);
+                    delete w.policyTemplate;
+                }
                 if (c.phase !== undefined)
                     w.phase = text(c.phase, "phase", 100, true);
                 if (c.priority !== undefined)
@@ -243,8 +279,14 @@ export class Workspace {
             }
             case "work.cancel":
             case "work.reopen": {
-                requireOperator(p);
                 const w = findWork(s, text(c.work, "work"));
+                if (p.role === "coordinator" && c.type === "work.cancel") {
+                    const co = assertCoordinatorWrite(s, p);
+                    assertScope(s, co, w.id, false);
+                    requireUnattempted(s, w.id);
+                }
+                else
+                    requireOperator(p);
                 const reason = text(c.reason, "reason");
                 w.state = c.type === "work.cancel" ? "cancelled" : "open";
                 touch(w);
@@ -272,17 +314,27 @@ export class Workspace {
             case "hold.resolve": {
                 const hold = s.holds[text(c.hold, "hold")];
                 demand(hold, "NOT_FOUND", "Hold not found", 404);
-                demand(p.role === "operator" || hold.authority === "worker" && p.execution === hold.execution, "FORBIDDEN", "Cannot resolve another authority's hold", 403);
-                if (p.role !== "operator")
-                    boundExecution(s, p, true);
+                if (p.role === "coordinator") {
+                    const co = assertCoordinatorWrite(s, p);
+                    assertScope(s, co, hold.work, false);
+                    demand(hold.authority === "worker", "FORBIDDEN", "Coordinator cannot resolve a human/operator hold", 403);
+                }
+                else {
+                    demand(p.role === "operator" || hold.authority === "worker" && p.execution === hold.execution, "FORBIDDEN", "Cannot resolve another authority's hold", 403);
+                    if (p.role !== "operator")
+                        boundExecution(s, p, true);
+                }
                 hold.resolvedAt = now();
                 emit(s, p, c.type, { id: hold.id, reason: text(c.reason, "reason") }, hold.work);
                 return { id: hold.id };
             }
             case "delegation.issue": {
                 const w = findWork(s, text(c.work, "work"));
+                const coordinator = p.role === "coordinator" ? assertCoordinatorWrite(s, p) : null;
                 const parent = p.execution ? boundExecution(s, p, true) : null;
-                if (p.role !== "operator") {
+                if (coordinator)
+                    assertScope(s, coordinator, w.id, false);
+                else if (p.role !== "operator") {
                     demand(parent && (p.role === "worker" || p.role === "launcher") && parent.role === "orchestrator" && parent.mode === "read", "FORBIDDEN", "Delegation requires a scoped orchestrator", 403);
                     freshExecution(s, parent);
                     inPlanningScope(s, parent, w.id);
@@ -291,14 +343,14 @@ export class Workspace {
                 const mode = choice(c.mode ?? "write", ["read", "write"] as const);
                 demand(role !== "orchestrator" || mode === "read", "FORBIDDEN", "Delegated orchestrators must be read-only", 403);
                 const token = uid("delegate"), id = uid("del");
-                s.delegations[id] = { id, parent: parent?.id ?? null, work: w.id, objective: text(c.objective ?? (w.description || w.title), "objective"), tokenHash: digest(token), expiresAt: new Date(Date.now() + 3600000).toISOString(), claimedBy: null, state: "issued", issuer: p.id, device: p.device, parentGeneration: parent?.generation, parentScopeRevision: parent?.scopeRevision, workScopeRevision: w.scopeRevision, role, mode, runtimeChildId: optionalText(c.runtimeChildId, "runtimeChildId") ?? null, revokedAt: null };
+                s.delegations[id] = { ...(coordinator ? { coordinatorIssuer: coordinator.id, issuerAgent: coordinator.runtimeAgent } : {}), id, parent: parent?.id ?? null, work: w.id, objective: text(c.objective ?? (w.description || w.title), "objective"), tokenHash: digest(token), expiresAt: new Date(Date.now() + 3600000).toISOString(), claimedBy: null, state: "issued", issuer: p.id, device: p.device, parentGeneration: parent?.generation, parentScopeRevision: parent?.scopeRevision, workScopeRevision: w.scopeRevision, role, mode, runtimeChildId: optionalText(c.runtimeChildId, "runtimeChildId") ?? null, revokedAt: null };
                 emit(s, p, c.type, { id, work: w.id }, w.id);
                 return { id, token };
             }
             case "delegation.revoke": {
                 const d = s.delegations[text(c.delegation, "delegation")];
                 demand(d, "NOT_FOUND", "Delegation not found", 404);
-                demand(p.role === "operator" || p.role === "worker" && d.parent === boundExecution(s, p, true).id, "FORBIDDEN", "Only the issuing parent or operator can revoke", 403);
+                demand(p.role === "operator" || p.role === "coordinator" && d.coordinatorIssuer === assertCoordinatorWrite(s, p).id || p.role === "worker" && d.parent === boundExecution(s, p, true).id, "FORBIDDEN", "Only the issuing parent or operator can revoke", 403);
                 demand(!d.claimedBy, "ALREADY_CLAIMED", "Revocation cannot stop a running process; use explicit stopped-process recovery");
                 d.state = "revoked";
                 d.revokedAt = now();
@@ -315,9 +367,20 @@ export class Workspace {
                 const agent = adapterAgent(s, p, text(c.agent, "agent"));
                 demand(agent.execution && agent.state !== "ended", "UNBOUND_RUNTIME_ACTOR", "Runtime actor has no active work binding", 403);
                 const e = s.executions[agent.execution]!;
+                demand(!e.coordinator, "TOOL_DISPATCH_REQUIRED", "Coordinator roots require per-tool coordination.dispatch; use CoordinatorBridge", 403);
                 demand(e.state === "active", "FENCED_EXECUTION", "Execution is inactive");
                 freshExecution(s, e);
                 return executionView(s, e.id, agent.id);
+            }
+            case "execution.next": {
+                requireOperator(p);
+                const g = grantFor(s, p, text(c.grant, "grant")), environment = text(c.environment, "environment");
+                demand(g.environments.includes(environment) && g.runtimes.includes(text(c.runtime, "runtime")), "FORBIDDEN", "Runtime/worktree not enrolled", 403);
+                demand(!c.continuedFrom, "INVALID_INPUT", "A continuation requires deliberate work selection");
+                const candidates = readyCandidates(s, { id: "", work: g.work, environment }, { limit: 1 });
+                if (!candidates.ready[0])
+                    return { idle: true, reason: "no_ready_work" };
+                return this.start(s, p, { ...c, type: "execution.start", work: candidates.ready[0].id });
             }
             case "execution.start": return this.start(s, p, c);
             case "execution.recover": {
@@ -355,6 +418,11 @@ export class Workspace {
                     demand(m.length > 0, "ARTIFACT_REQUIRED", "Evidence policy needs an exact artifact version");
                 const id = uid("result");
                 s.results[id] = { id, work: w.id, execution: e?.id ?? null, scopeRevision: e?.scopeRevision ?? w.scopeRevision, basis: e?.basis ?? dependencyBasis(s, w), summary: text(c.summary, "summary"), manifest: m, subject: subject(m), submittedAt: now() };
+                if (e?.coordinator && p.dispatch) {
+                    const d = s.dispatches[p.dispatch];
+                    demand(d?.execution === e.id && d.state === "open", "STALE_DISPATCH", "Submission requires the exact tool assignment");
+                    d.releaseRequested = true;
+                }
                 emit(s, p, c.type, { id, subject: s.results[id]!.subject }, w.id);
                 return { id, work: w.id, subject: s.results[id]!.subject };
             }
@@ -378,7 +446,7 @@ export class Workspace {
             case "effect.begin": {
                 if (p.role !== "operator")
                     freshExecution(s, boundExecution(s, p, true));
-                demand(p.role === "operator" || p.role === "launcher", "FORBIDDEN", "Launcher permission required", 403);
+                demand(p.role === "operator" || p.role === "launcher" || p.role === "effect", "FORBIDDEN", "External effect permission required", 403);
                 const effect = s.effects[text(c.effectId, "effectId")];
                 demand(effect, "NOT_FOUND", "Effect not found", 404);
                 demand(p.role === "operator" || effect.execution === p.execution, "FORBIDDEN", "Effect outside launcher scope", 403);
@@ -388,7 +456,9 @@ export class Workspace {
                 return effect;
             }
             case "effect.resolve": {
-                demand(p.role === "operator" || p.role === "launcher", "FORBIDDEN", "Launcher permission required", 403);
+                if (p.role !== "operator")
+                    boundExecution(s, p, true);
+                demand(p.role === "operator" || p.role === "launcher" || p.role === "effect", "FORBIDDEN", "External effect permission required", 403);
                 const e = s.effects[text(c.effectId, "effectId")];
                 demand(e, "NOT_FOUND", "Effect not found", 404);
                 if (p.role !== "operator")
@@ -434,11 +504,19 @@ export class Workspace {
     }
     private start(s: State, p: Principal, c: ObjectValue, nativeAgent?: RuntimeAgent): unknown {
         const w = findWork(s, text(c.work, "work"));
+        const co = p.role === "coordinator" ? coordinatorFor(s, p) : null;
+        if (co)
+            assertScope(s, co, w.id, false);
         let delegation = null;
         if (c.delegationToken !== undefined) {
             delegation = values(s.delegations).find(d => d.tokenHash === digest(text(c.delegationToken, "delegationToken")));
             demand(delegation && delegation.work === w.id && !delegation.claimedBy && delegation.expiresAt > now() && delegation.state === "issued", "INVALID_DELEGATION", "Delegation expired, revoked, claimed, or requires reissue", 403);
             demand(delegation.issuer === p.id && delegation.device === p.device && delegation.workScopeRevision === w.scopeRevision, "INVALID_DELEGATION", "Delegation owner, device or work scope changed", 403);
+            if (delegation.coordinatorIssuer) {
+                const issuer = s.coordinators[delegation.coordinatorIssuer];
+                demand(issuer && co?.id === issuer.id, "INVALID_DELEGATION", "Wrong coordinator issuer", 403);
+                assertScope(s, issuer, w.id, false);
+            }
             if (delegation.parent) {
                 const parent = s.executions[delegation.parent];
                 demand(parent && parent.state === "active" && parent.generation === delegation.parentGeneration, "INVALID_DELEGATION", "Issuing parent is no longer active", 403);
@@ -449,7 +527,7 @@ export class Workspace {
             }
             demand(!delegation.runtimeChildId || nativeAgent?.externalAgentId === delegation.runtimeChildId, "INVALID_DELEGATION", "Delegation is reserved for a different runtime child", 403);
         }
-        demand(p.role === "operator" || delegation && delegation.parent === p.execution && (p.role === "launcher" || p.role === "worker"), "FORBIDDEN", "Start requires operator or delegated launcher", 403);
+        demand(p.role === "operator" || co && (!delegation || delegation.coordinatorIssuer === co.id) || delegation && delegation.parent === p.execution && (p.role === "launcher" || p.role === "worker"), "FORBIDDEN", "Start requires operator or delegated launcher", 403);
         const role = choice(c.role ?? delegation?.role ?? "implementer", ["implementer", "reviewer", "orchestrator", "validator", "integrator"] as const), mode = choice(c.mode ?? delegation?.mode ?? "write", ["read", "write"] as const);
         if (delegation)
             demand(role === delegation.role && mode === delegation.mode, "INVALID_DELEGATION", "Role and access mode are fixed by the delegation", 403);
@@ -460,7 +538,10 @@ export class Workspace {
             demand(!source || source.mode === "next", "READ_ONLY_SHADOW", "Imported scope is not the active authority");
         }
         const environment = text(c.environment, "environment", 2000);
-        const why = reasons(s, w, environment, mode === "read", role === "orchestrator" && mode === "read");
+        if (co)
+            demand(grantFor(s, p, co.grant).environments.includes(environment), "FORBIDDEN", "Checkout was not operator-approved", 403);
+        const checkState = co && !nativeAgent ? { ...s, reservations: Object.fromEntries(values(s.reservations).filter(r => r.coordinator !== co.id).map(r => [r.id, r])) } : s;
+        const why = reasons(checkState, w, environment, mode === "read", role === "orchestrator" && mode === "read");
         demand(why.length === 0, "NOT_READY", why.join(", "));
         const continued = optionalText(c.continuedFrom, "continuedFrom");
         if (continued)
@@ -476,7 +557,7 @@ export class Workspace {
             runId = text(c.existingRun, "existingRun");
             demand(s.runs[runId]?.device === p.device && s.runs[runId]!.state === "active", "INVALID_RUN", "Run must be active on this device");
             demand(s.runs[runId]!.runtime === runtime && (!session || s.runs[runId]!.session === session), "INVALID_RUN", "Run runtime/session cannot be rebound");
-            demand(p.role === "operator" || nativeAgent?.run === runId, "INVALID_RUN", "Delegation cannot reuse an unrelated Run", 403);
+            demand(p.role === "operator" || nativeAgent?.run === runId || co?.run === runId, "INVALID_RUN", "Delegation cannot reuse an unrelated Run", 403);
         }
         else {
             runId = uid("run");
@@ -488,7 +569,7 @@ export class Workspace {
         const id = uid("exec"), generation = 1;
         s.executions[id] = { id, work: w.id, run: runId, role, mode, state: "active", scopeRevision: w.scopeRevision, generation, basis: dependencyBasis(s, w), environment, continuedFrom: continued ?? null, parent: delegation?.parent ?? null, delegation: delegation?.id ?? null, startedAt: now(), endedAt: null };
         const requested = [...w.resources];
-        if (mode === "write")
+        if (mode === "write" && !(co && !nativeAgent && values(s.reservations).some(r => r.coordinator === co.id && r.state === "active" && r.key === `environment:${environment}`)))
             requested.push({ key: `environment:${environment}`, mode: "exclusive" });
         for (const r of requested) {
             const rid = uid("reservation");
@@ -568,7 +649,8 @@ export class Workspace {
         const parent = adapterAgent(s, p, agent.parent);
         const ticket = text(c.delegationToken, "delegationToken");
         const d = values(s.delegations).find(x => x.tokenHash === digest(ticket));
-        demand(d && parent.execution && d.parent === parent.execution, "INVALID_DELEGATION", "Delegation must be issued by the observed runtime parent", 403);
+        const coordinatorIssuer = d?.coordinatorIssuer ? s.coordinators[d.coordinatorIssuer] : undefined;
+        demand(d && (parent.execution && d.parent === parent.execution || coordinatorIssuer && d.issuerAgent === parent.id && coordinatorIssuer.runtimeAgent === parent.id), "INVALID_DELEGATION", "Delegation must be issued by the observed runtime parent", 403);
         if (agent.execution) {
             const e = s.executions[agent.execution]!;
             demand(d.claimedBy === e.id && e.delegation === d.id && e.environment === text(c.environment, "environment", 2000), "RUNTIME_BINDING_CONFLICT", "Runtime child cannot change work, delegation or environment");
@@ -577,8 +659,10 @@ export class Workspace {
             return executionView(s, e.id, agent.id);
         }
         demand(parent.state !== "ended", "RUNTIME_PARENT_ENDED", "Ended parent cannot authorize a new work binding");
-        const parentExecution = s.executions[parent.execution]!;
-        const delegated: Principal = { id: p.id, device: p.device, role: "launcher", execution: parentExecution.id, generation: parentExecution.generation };
+        const parentExecution = parent.execution ? s.executions[parent.execution] : undefined;
+        const delegated: Principal = coordinatorIssuer
+            ? { id: p.id, device: p.device, role: "coordinator", coordinator: coordinatorIssuer.id, generation: coordinatorIssuer.generation }
+            : { id: p.id, device: p.device, role: "launcher", execution: parentExecution!.id, generation: parentExecution!.generation };
         const started = this.start(s, delegated, { work: d.work, delegationToken: ticket, environment: text(c.environment, "environment", 2000), runtime: agent.runtime, existingRun: agent.run, launchId: agent.invocationId }, agent) as {
             execution: string;
         };

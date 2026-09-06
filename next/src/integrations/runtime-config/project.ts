@@ -3,7 +3,7 @@ import { dirname, join, delimiter } from "node:path";
 import { randomUUID } from "node:crypto";
 import { demand, digest, Fault } from "../../domain/util.js";
 import { git, gitPath, tryGit } from "../../git/repository.js";
-import { context } from "../../cli/files.js";
+import { managedContext } from "../../cli/files.js";
 import { configPath, configPaths, groups, ompExtension, runtimeNames, commands, adapterVersion, type RuntimeName, type HookGroup } from "./catalog.js";
 type JsonObject = Record<string, unknown>;
 export type ProjectConfig = {
@@ -252,7 +252,7 @@ function atomicText(path: string, content: string | null, mode: number): void {
     }
 }
 function locked<T>(root: string, operation: () => T): T {
-    demand(!context(), "FORBIDDEN", "Runtime integration settings are operator-owned", 403);
+    demand(!managedContext(), "FORBIDDEN", "Runtime integration settings are operator-owned", 403);
     const s = stateFiles(root);
     mkdirSync(s.dir, { recursive: true, mode: 0o700 });
     try {

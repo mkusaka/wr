@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { Client, syncOutbox, pendingCount } from "./client.js";
-import { context, stateHome, atomic, readJson, type Connection } from "./files.js";
+import { managedContext, coordinatorConnection, context, stateHome, atomic, readJson, type Connection } from "./files.js";
 import { Fault, demand, uid } from "../domain/util.js";
 import { runWork } from "./run.js";
 import { processIdentity } from "../runtime/process.js";
@@ -20,14 +20,19 @@ import { syncIntegrations, integrationStatus, projectRoot, readProjectConfig, de
 import { runtimeNames, type RuntimeName } from "../integrations/runtime-config/catalog.js";
 const help = `wr-next — isolated work coordination and provenance
 
-  init [--runtime claude,codex,omp] [--dry-run] [--no-git-hooks]
+  init [--agent-managed] [--runtime claude,codex,omp] [--dry-run] [--no-git-hooks]
   integrations [status|sync|install RUNTIME|uninstall RUNTIME|recover]
   authority stop                         Stop the managed local authority
   serve [--port N] [--database PATH]       Local authority (loopback only)
   connect --server URL --workspace KEY --token-file PATH
   add TITLE [--under W] [--needs W1,W2] [--link REF]
-  plan --file FILE                        Atomic typed plan changes
-  run W [--runtime generic|claude|codex|omp|devin] [--isolated] [--read-only] [--role ROLE] -- COMMAND...
+  plan --file FILE | --changes JSON       Atomic typed plan changes
+  ready | next [--claim]                  Inspect or atomically select scoped work
+  claim [REF] [--retry --reason TEXT]     Bind current agent, no human ID required
+  yield --reason TEXT                    Release work at the next tool boundary
+  delegate REF [--role ROLE]             Scoped assignment for a trusted harness
+  management status|disable              Private repository authorization
+  run [W | --next] [--runtime generic|claude|codex|omp|devin] [--isolated] [--read-only] [--role ROLE] -- COMMAND...
   status [W] [--format json] [--since CURSOR]
   report [W] --decision TEXT [--reason TEXT]
   report [W] --blocked TEXT | --progress TEXT
@@ -59,8 +64,8 @@ type Args = {
 };
 function args(argv: string[]): Args {
     const out: Args = { pos: [], opts: {}, tail: [] };
-    const booleans = new Set(["read-only", "apply", "stopped", "json", "help", "replan", "dry-run", "no-git-hooks", "isolated"]);
-    const valued = new Set(["port", "database", "workspace", "server", "token-file", "under", "needs", "link", "description", "lane", "checks", "file", "runtime", "role", "continue", "session", "worktree", "since", "offset", "format", "output", "decision", "reason", "blocked", "progress", "summary", "check", "repo", "title", "body-file", "base", "operation", "source", "confirm", "comparison", "identity", "adapter-version", "installation", "event"]);
+    const booleans = new Set(["read-only", "apply", "stopped", "json", "help", "replan", "dry-run", "no-git-hooks", "isolated", "agent-managed", "claim", "retry", "next"]);
+    const valued = new Set(["port", "database", "workspace", "server", "token-file", "under", "needs", "link", "description", "lane", "checks", "file", "runtime", "role", "continue", "session", "worktree", "since", "offset", "format", "output", "decision", "reason", "blocked", "progress", "summary", "check", "repo", "title", "body-file", "base", "operation", "source", "confirm", "comparison", "identity", "adapter-version", "installation", "event", "changes", "scope"]);
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i]!;
         if (a === "--") {
@@ -127,7 +132,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
             json({ runtimes: statuses, note: "Installation is not proof of hook trust/loading. Run-scoped handshakes are recorded privately." });
             return statuses.some(s => s.installation === "drift") ? 2 : 0;
         }
-        demand(!context(), "FORBIDDEN", "Managed workers cannot change runtime installation", 403);
+        demand(!managedContext(), "FORBIDDEN", "Managed workers cannot change runtime installation", 403);
         if (action === "recover") {
             recoverIntegrations(process.cwd());
             json({ recovered: true });
@@ -168,7 +173,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
             }
         }
         // Runtime config update and Git-hook installation have separate recovery boundaries.
-        json({ ...result, gitHooks });
+        let management: unknown = undefined;
+        if (a.opts["agent-managed"]) {
+            demand(action === "init", "INVALID_ARGUMENT", "Use init --agent-managed for explicit repository authorization");
+            if (a.opts["dry-run"])
+                management = { state: "planned", privateAuthorization: true };
+            else {
+                const { ensureConnection } = await import("./authority.js");
+                const { enableAgentManagement } = await import("./coordination.js");
+                management = await enableAgentManagement(root, await ensureConnection(), { work: opt(a, "scope"), checks: opt(a, "checks")?.split(",") });
+            }
+        }
+        json({ ...result, gitHooks, management });
         return result.statuses.some(s => s.installation === "drift") || (gitHooks as {
             state?: string;
         }).state === "manual-action-required" ? 2 : 0;
@@ -199,7 +215,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
     }
     if (cmd === "serve") {
-        demand(!context(), "FORBIDDEN", "Managed workers cannot start an authority", 403);
+        demand(!managedContext(), "FORBIDDEN", "Managed workers cannot start an authority", 403);
         const { startLocal } = await import("../server/local.js");
         const dir = stateHome();
         mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -214,7 +230,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
     }
     if (cmd === "connect") {
-        demand(!context(), "FORBIDDEN", "Managed workers cannot change the authority connection", 403);
+        demand(!managedContext(), "FORBIDDEN", "Managed workers cannot change the authority connection", 403);
         const server = required(a, "server"), url = new URL(server);
         demand(url.protocol === "https:" || url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname), "UNSAFE_SERVER", "Remote authority must use HTTPS");
         atomic(join(stateHome(), "connection.json"), { server, workspace: required(a, "workspace"), device: uid("device"), token: readFileSync(required(a, "token-file"), "utf8").trim() });
@@ -222,6 +238,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
     }
     if (cmd === "hooks") {
+        demand(sub === "status" || !managedContext(), "FORBIDDEN", "Agent cannot change instrumentation", 403);
         demand(["install", "status", "uninstall"].includes(sub ?? ""), "INVALID_ARGUMENT", "Unknown hooks command", 400);
         json(sub === "install" ? installHooks(process.cwd()) : sub === "uninstall" ? uninstallHooks(process.cwd()) : hooksStatus(process.cwd()));
         return 0;
@@ -253,24 +270,94 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.log("Local authority stopped");
         return 0;
     }
-    const known = new Set(["add", "plan", "run", "status", "report", "done", "hold", "cancel", "reopen", "recover", "graph", "export", "hooks", "contribute", "provenance", "verify", "pr", "explain", "import", "shadow", "cutover", "rollback", "doctor", "agents"]);
+    const known = new Set(["add", "plan", "run", "status", "report", "done", "hold", "cancel", "reopen", "recover", "graph", "export", "hooks", "contribute", "provenance", "verify", "pr", "explain", "import", "shadow", "cutover", "rollback", "doctor", "agents", "ready", "next", "claim", "yield", "delegate", "management"]);
     demand(known.has(cmd), "INVALID_ARGUMENT", `Unknown command ${cmd}; run --help`, 400);
     const { ensureConnection } = await import("./authority.js");
-    const cfg = await ensureConnection(), client = new Client(cfg);
+    const resolved = await ensureConnection();
+    const co = coordinatorConnection();
+    const control = ["add", "plan", "ready", "next", "claim", "yield", "delegate", "agents", "graph", "cancel", "hold", "status", "export"].includes(cmd);
+    const cfg = control && co ? co : resolved, client = new Client(cfg);
+    if (cmd === "management") {
+        demand(!managedContext(), "FORBIDDEN", "Only the operator manages repository enrollment", 403);
+        const { readRegistration, disableAgentManagement } = await import("./coordination.js");
+        if (sub === "disable") {
+            await disableAgentManagement(process.cwd(), cfg, opt(a, "reason") ?? "Operator disabled repository coordination");
+            json({ disabled: true });
+        }
+        else {
+            demand(sub === "status" || !sub, "INVALID_ARGUMENT", "Use management status or disable");
+            const reg = readRegistration(process.cwd());
+            json({ configured: Boolean(reg), root: reg?.root, scope: reg?.work, privateAuthorization: true });
+        }
+        return 0;
+    }
+    if (cmd === "ready" || cmd === "next" || cmd === "claim") {
+        if (!co && cmd !== "claim" && !(cmd === "next" && a.opts.claim)) {
+            demand(!managedContext(), "FORBIDDEN", "This one-shot worker has no Coordinator scope", 403);
+            const { readRegistration } = await import("./coordination.js");
+            const reg = readRegistration(process.cwd());
+            demand(reg, "REPOSITORY_NOT_ENROLLED", "Run init --agent-managed once");
+            json(await client.request(`/v1/ready?grant=${encodeURIComponent(reg.grant)}&environment=${encodeURIComponent(reg.environment)}`));
+            return 0;
+        }
+        demand(co, "UNBOUND_COORDINATOR", "Use an enrolled runtime or wr-next run --next; no ambient current-work inference", 403);
+        if (cmd === "claim" || cmd === "next" && a.opts.claim) {
+            const { claimCurrentTool } = await import("../runtime/coordinator.js");
+            json(await claimCurrentTool(sub, Boolean(a.opts.retry), opt(a, "reason")));
+        }
+        else
+            json(await client.request("/v1/ready"));
+        return 0;
+    }
+    if (cmd === "yield") {
+        json(await client.command({ type: "work.yield", reason: required(a, "reason") }));
+        return 0;
+    }
+    if (cmd === "delegate") {
+        demand(sub, "INVALID_ARGUMENT", "Select a ref from ready for a deliberate delegation");
+        const response = await client.command({ type: "delegation.issue", work: sub, objective: opt(a, "description") ?? "Delegated ready work", role: opt(a, "role") ?? "implementer", mode: a.opts["read-only"] ? "read" : "write" });
+        // The raw grant stays in private storage for a trusted native dispatcher.
+        const file = join(stateHome(), "assignments", `${response.result.id}.json`);
+        atomic(file, { ...response.result, coordinator: co });
+        json({ assignment: response.result.id, work: sub, state: "issued", nextAction: "Hand the assignment reference to the trusted native adapter; no child is started by this command." });
+        return 0;
+    }
     if (cmd === "run") {
-        demand(sub, "INVALID_ARGUMENT", "Select work");
+        demand(Boolean(sub) !== Boolean(a.opts.next), "INVALID_ARGUMENT", "Select work or use --next");
+        let selectionGrant: string | undefined;
+        if (a.opts.next) {
+            demand(!managedContext(), "FORBIDDEN", "A managed root selects with next --claim; use a native dispatcher for children", 403);
+            const { readRegistration } = await import("./coordination.js");
+            const reg = readRegistration(process.cwd());
+            demand(reg, "REPOSITORY_NOT_ENROLLED", "Run init --agent-managed once before using --next");
+            selectionGrant = reg.grant;
+        }
         demand(["generic", ...runtimeNames].includes(opt(a, "runtime") ?? "generic"), "UNSUPPORTED_RUNTIME", "Unknown runtime adapter", 400);
-        const result = await runWork(cfg, { work: sub, argv: a.tail, runtime: opt(a, "runtime"), role: opt(a, "role"), readOnly: Boolean(a.opts["read-only"]), continuedFrom: opt(a, "continue"), session: opt(a, "session"), worktree: opt(a, "worktree"), isolated: Boolean(a.opts.isolated) });
+        const result = await runWork(cfg, { work: sub, selectionGrant, argv: a.tail, runtime: opt(a, "runtime"), role: opt(a, "role"), readOnly: Boolean(a.opts["read-only"]), continuedFrom: opt(a, "continue"), session: opt(a, "session"), worktree: opt(a, "worktree"), isolated: Boolean(a.opts.isolated) });
         json(result);
         return result.exitCode;
     }
     if (cmd === "add") {
         demand(sub, "INVALID_ARGUMENT", "Title required");
-        json(await client.command({ type: "work.create", title: sub, parent: opt(a, "under"), replan: Boolean(a.opts.replan), needs: opt(a, "needs")?.split(","), links: opt(a, "link") ? [opt(a, "link")] : [], description: opt(a, "description"), lane: opt(a, "lane"), policy: opt(a, "checks") ? { name: "evidence-v1", checks: opt(a, "checks")!.split(",") } : undefined }));
+        let parent = opt(a, "under");
+        if (!parent && !managedContext()) {
+            const { readRegistration } = await import("./coordination.js");
+            try {
+                const reg = readRegistration(process.cwd());
+                if (reg && reg.bootstrap.workspace === cfg.workspace && reg.bootstrap.device === cfg.device)
+                    parent = reg.work;
+            }
+            catch (error) {
+                if (error instanceof Fault && error.code !== "GIT_ERROR")
+                    throw error;
+            }
+        }
+        json(await client.command({ type: "work.create", title: sub, parent, replan: Boolean(a.opts.replan), needs: opt(a, "needs")?.split(","), links: opt(a, "link") ? [opt(a, "link")] : [], description: opt(a, "description"), lane: opt(a, "lane"), policy: opt(a, "checks") ? { name: "evidence-v1", checks: opt(a, "checks")!.split(",") } : undefined }));
         return 0;
     }
     if (cmd === "plan") {
-        const changes = readJson<unknown>(required(a, "file"));
+        demand(Boolean(opt(a, "file")) !== Boolean(opt(a, "changes")), "INVALID_ARGUMENT", "Specify exactly one of --file or --changes");
+        const changes = opt(a, "changes") ? JSON.parse(opt(a, "changes")!) : readJson<unknown>(required(a, "file"));
         const v = await client.request<View>("/v1/status");
         json(await client.command({ type: "work.plan", changes }, { revision: v.revision }));
         return 0;
@@ -279,6 +366,22 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         const params = new URLSearchParams();
         if (sub)
             params.set("work", sub);
+        else if (co) {
+            const { toolCoordinator } = await import("../runtime/coordinator.js");
+            params.set("work", toolCoordinator()!.work);
+        }
+        else if (!managedContext()) {
+            const { readRegistration } = await import("./coordination.js");
+            try {
+                const reg = readRegistration(process.cwd());
+                if (reg && reg.bootstrap.workspace === cfg.workspace && reg.bootstrap.device === cfg.device)
+                    params.set("work", reg.work);
+            }
+            catch (error) {
+                if (error instanceof Fault && error.code !== "GIT_ERROR")
+                    throw error;
+            }
+        }
         if (opt(a, "since"))
             params.set("since", opt(a, "since")!);
         if (opt(a, "offset"))
@@ -300,11 +403,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
     }
     if (cmd === "report") {
+        if (co && !context()) {
+            demand(!sub && !a.opts.blocked, "NO_CURRENT_WORK", "Root notes may record decisions/progress; claim work before reporting a work blocker");
+            const kind = a.opts.decision ? "decision" : "progress";
+            json(await new Client(co).command({ type: "coordination.note", kind, summary: required(a, kind), reason: opt(a, "reason") }));
+            return 0;
+        }
         const kind = a.opts.decision ? "decision" : a.opts.blocked ? "blocked" : "progress";
         json(await client.command({ type: "work.report", work: sub, kind, summary: required(a, kind), reason: opt(a, "reason") }, { queue: true }));
         return 0;
     }
     if (cmd === "done") {
+        demand(!co || context(), "NO_CURRENT_WORK", "Claim work before submitting a result");
         await syncOutbox();
         let artifacts: {
             repo: string;

@@ -47,7 +47,30 @@ wr-next integrations uninstall codex
 
 Installation, actual loading/trust, and native subagent binding are separate statuses. `init` does not claim all three are ready. See [repository integrations](docs/repository-integrations.md) for worktree handling, conflict recovery, and runtime limitations.
 
-## Start work
+## Agent-managed coordination
+
+Approve one local checkout/device once, then start Claude normally without choosing a Work ID:
+
+```sh
+wr-next init --agent-managed --runtime claude
+# Optional operator-owned default verification policy:
+# wr-next init --agent-managed --runtime claude --checks tests
+claude
+```
+
+The root session starts as a scoped Coordinator without an implementation Execution or writer reservation. It can plan inside the approved repository scope, inspect deterministic ready candidates, and atomically claim one leaf:
+
+```sh
+wr-next status
+wr-next plan --changes '[{"type":"work.create","title":"Implement the request"}]'
+wr-next next --claim
+wr-next report --decision "Reuse the existing API" --reason "Preserve its contract"
+wr-next done --summary "Submitted the implementation"
+```
+
+Tool calls keep the Execution binding they received when dispatched; a late tool cannot follow the Coordinator onto another Work. Enrollment is private and device/authority-bound. Committed hook files alone grant no coordination authority. Plain-start bootstrap is currently implemented only for Claude; Codex and OMP use `wr-next run --next -- COMMAND` or a trusted `CoordinatorBridge`. See [agent-managed coordination](docs/agent-managed-coordination.md).
+
+## Explicit operator-selected work
 
 The existing local authority manager starts/reuses a private loopback authority on the first operator command. `WR_NEXT_HOME` selects the wr-next state directory. Every local client must use the same setting. Remote profiles remain remote; a connection failure does not create a different local authority.
 

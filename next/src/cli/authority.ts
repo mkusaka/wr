@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
-import { context, connection, stateHome, readJson, atomic, type Connection } from "./files.js";
+import { managedContext, connection, stateHome, readJson, atomic, type Connection } from "./files.js";
 import { cliPath } from "./entrypoint.js";
 import { processIdentity } from "../runtime/process.js";
 import { demand, Fault } from "../domain/util.js";
@@ -32,7 +32,7 @@ function processLive(cfg: Connection): boolean {
 }
 /** No remote fallback, SQLite direct access, PID-only lock stealing, or hook autostart. */
 export async function ensureConnection(): Promise<Connection> {
-    if (context())
+    if (managedContext())
         return connection();
     const home = stateHome(), path = join(home, "connection.json"), lock = join(home, ".authority-start.lock");
     let cfg = existsSync(path) ? connection() : null;
@@ -133,7 +133,7 @@ export async function ensureConnection(): Promise<Connection> {
 }
 /** Stop only our authenticated local profile with a matching OS process fingerprint. */
 export async function stopLocalAuthority(): Promise<void> {
-    demand(!context(), "FORBIDDEN", "Managed worker cannot stop its authority", 403);
+    demand(!managedContext(), "FORBIDDEN", "Managed worker cannot stop its authority", 403);
     const cfg = connection();
     demand(local(cfg) && cfg.localAuthority, "AUTHORITY_NOT_CONFIGURED", "No managed local authority");
     demand(await responding(cfg) && processLive(cfg), "AUTHORITY_IDENTITY_CONFLICT", "Cannot establish the original authority process identity");

@@ -13,7 +13,10 @@ export type ArtifactRef = {
 export type Principal = {
     id: string;
     device: string;
-    role: "operator" | "worker" | "launcher" | "collector" | "adapter";
+    role: "operator" | "worker" | "launcher" | "collector" | "adapter" | "bootstrap" | "coordinator" | "coordination-runtime" | "effect";
+    grant?: string;
+    coordinator?: string;
+    dispatch?: string;
     execution?: string;
     checks?: string[];
     generation?: number;
@@ -21,6 +24,8 @@ export type Principal = {
     runtimeAgent?: string;
 };
 export type Work = {
+    collection?: boolean;
+    policyTemplate?: string;
     id: string;
     key: string;
     parent: string | null;
@@ -77,6 +82,7 @@ export type Run = {
     metadata: Record<string, string>;
 };
 export type Execution = {
+    coordinator?: string;
     id: string;
     work: string;
     run: string;
@@ -94,6 +100,7 @@ export type Execution = {
     endedAt: string | null;
 };
 export type Reservation = {
+    coordinator?: string;
     id: string;
     execution: string;
     key: string;
@@ -237,6 +244,8 @@ export type PullRequest = {
     }[];
 };
 export type Delegation = {
+    coordinatorIssuer?: string;
+    issuerAgent?: string;
     id: string;
     parent: string | null;
     work: string;
@@ -300,6 +309,9 @@ export type Lane = {
     capacity: number;
 };
 export type Rows = {
+    coordinationGrants: CoordinationGrant;
+    coordinators: Coordinator;
+    dispatches: WorkDispatch;
     work: Work;
     dependencies: Dependency;
     sessions: Session;
@@ -323,7 +335,7 @@ export type Rows = {
     lanes: Lane;
     runtimeAgents: RuntimeAgent;
 };
-export const tables = ["work", "dependencies", "sessions", "runs", "executions", "reservations", "holds", "results", "checks", "acceptances", "events", "contexts", "artifacts", "contributions", "rewrites", "prs", "delegations", "sources", "effects", "devices", "lanes", "runtimeAgents"] as const;
+export const tables = ["work", "dependencies", "sessions", "runs", "executions", "reservations", "holds", "results", "checks", "acceptances", "events", "contexts", "artifacts", "contributions", "rewrites", "prs", "delegations", "sources", "effects", "devices", "lanes", "runtimeAgents", "coordinationGrants", "coordinators", "dispatches"] as const;
 export type State = {
     [K in keyof Rows]: Record<string, Rows[K]>;
 } & {
@@ -336,3 +348,44 @@ export type State = {
 export function emptyState(): State {
     return { ...Object.fromEntries(tables.map(t => [t, {}])), meta: { revision: 0, sequence: 0, nextKey: 1 } } as State;
 }
+/** Operator-approved repo/work scope. No execution is fabricated for planning. */
+export type CoordinationGrant = {
+    id: string;
+    repository: string;
+    work: string;
+    owner: string;
+    device: string;
+    environments: string[];
+    runtimes: string[];
+    generation: number;
+    state: "enabled" | "revoked";
+    defaultPolicy: Policy;
+    maxItems: number;
+};
+export type Coordinator = {
+    id: string;
+    grant: string;
+    grantGeneration: number;
+    work: string;
+    runtimeAgent: string;
+    run: string;
+    device: string;
+    owner: string;
+    environment: string;
+    generation: number;
+    scopeRevision: number;
+    intent: string;
+    currentExecution: string | null;
+    state: "active" | "closed" | "unknown";
+};
+/** A tool's assignment is pinned, never resolved from a mutable "latest work". */
+export type WorkDispatch = {
+    id: string;
+    coordinator: string;
+    externalId: string;
+    inputDigest: string;
+    execution: string | null;
+    generation: number | null;
+    state: "open" | "closed";
+    releaseRequested: boolean;
+};

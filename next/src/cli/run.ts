@@ -23,10 +23,10 @@ export async function runWork(cfg: Connection, options: RunOptions): Promise<Lau
     // A failed preflight leaves a newly created worktree intact for inspection.
     const profile = prepareLaunchProfile(cwd, options.argv, options.runtime, options.isolated);
     const environment = tryGit(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"]) ?? cwd;
-    const result = await launch(cfg, { work: options.work, argv: profile.argv, cwd, environment,
+    const result = await launch(cfg, { work: options.work, selectionGrant: options.selectionGrant, argv: profile.argv, cwd, environment,
         runtime: profile.runtime, integration: profile.integration, env: withoutAncestorProviderSession(process.env),
         role: options.role, readOnly: options.readOnly, continuedFrom: options.continuedFrom, session: options.session });
-    if (profile.integration && !existsSync(join(dirname(result.receipt), "integration-seen.json")))
+    if (!result.idle && profile.integration && !existsSync(join(dirname(result.receipt), "integration-seen.json")))
         console.error(`wr-next: ${profile.runtime} exited without a verified SessionStart handshake; hook loading/trust was not proven. Process tracking only; no native-support claim.`);
     return result;
 }

@@ -10,7 +10,8 @@ import { processIdentity } from "./process.js";
 export { processIdentity } from "./process.js";
 import { supervise } from "./supervisor.js";
 export type LaunchOptions = {
-    work: string;
+    work?: string;
+    selectionGrant?: string;
     argv: string[];
     cwd?: string;
     environment?: string;
@@ -23,6 +24,7 @@ export type LaunchOptions = {
     env?: NodeJS.ProcessEnv;
 };
 export type LaunchResult = {
+    idle?: boolean;
     exitCode: number;
     execution: string;
     receipt: string;
@@ -43,9 +45,21 @@ export async function launch(cfg: Connection, options: LaunchOptions): Promise<L
         const grant = await client.command({ type: "delegation.issue", work: options.work, objective: `Delegated work ${options.work}`, role: options.role ?? "implementer", mode: options.readOnly ? "read" : "write" });
         delegationToken = grant.result.token;
     }
-    const start = await client.command<StartResponse>({ type: "execution.start", work: options.work, launchId,
+    demand(Boolean(options.work) !== Boolean(options.selectionGrant), "INVALID_COMMAND", "Select explicit work or an approved next-work scope");
+    const started = await client.command<StartResponse | {
+        result: {
+            idle: true;
+            reason: string;
+        };
+    }>({ type: options.selectionGrant ? "execution.next" : "execution.start", ...(options.selectionGrant ? { grant: options.selectionGrant } : { work: options.work }), launchId,
         environment: options.environment ?? cwd, runtime, role: options.role ?? "implementer", mode: options.readOnly ? "read" : "write",
         continuedFrom: options.continuedFrom, session: options.session, delegationToken }, { id: launchId });
+    if ("idle" in started.result) {
+        const receipt = join(dir, "receipt.json");
+        atomic(receipt, { launchId, state: "idle", reason: started.result.reason, process: null });
+        return { idle: true, exitCode: 0, execution: "", receipt };
+    }
+    const start = started as StartResponse;
     const ctxPath = join(dir, "context.json"), receiptPath = join(dir, "receipt.json");
     const observationConnection = capabilityConnection(cfg, start.capabilities.launcher);
     const receipt = { launchId, execution: start.result.execution, run: start.result.run, cwd,

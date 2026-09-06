@@ -6,6 +6,8 @@ import { Tokens } from "./auth.js";
 import { boundExecution, adapterAgent, executionView, freshExecution } from "../domain/runtime.js";
 import { runtimeView, runtimeMermaid } from "../projections/runtime.js";
 import { view, explainCommit, explainPr } from "../projections/views.js";
+import { coordinationCredentials } from "./coordination.js";
+import { coordinatorFor, readyCandidates, grantFor } from "../domain/coordination.js";
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 export function application(workspace: Workspace, tokens: Tokens, authenticate: (r: Request) => Principal | Promise<Principal>) {
     return async (request: Request): Promise<Response> => {
@@ -44,7 +46,10 @@ export function application(workspace: Workspace, tokens: Tokens, authenticate: 
                 const output = workspace.execute(message, p, url.pathname === "/v1/observations") as {
                     result: Record<string, unknown>;
                 };
-                if (["execution.start", "runtime.attach", "runtime.bind", "runtime.credentials", "runtime.child"].includes(message.command.type) && output.result.execution && output.result.generation !== undefined) {
+                const coordinatorOutput = coordinationCredentials(workspace.store.snapshot(), p, message.command.type, output, tokens);
+                if (coordinatorOutput)
+                    return json(coordinatorOutput);
+                if (["execution.start", "execution.next", "runtime.attach", "runtime.bind", "runtime.credentials", "runtime.child"].includes(message.command.type) && output.result.execution && output.result.generation !== undefined) {
                     const e = output.result.execution as string;
                     const s = workspace.store.snapshot(), execution = s.executions[e];
                     demand(execution && s.runs[execution.run]?.device === p.device && execution.state === "active" && execution.generation === output.result.generation, "FENCED_EXECUTION", "Cached launch cannot refresh a stopped or revoked execution");
@@ -58,12 +63,29 @@ export function application(workspace: Workspace, tokens: Tokens, authenticate: 
             }
             demand(request.method === "GET", "METHOD_NOT_ALLOWED", "Method not allowed", 405);
             const state = workspace.store.snapshot();
-            if (p.role === "adapter") {
+            demand(p.role !== "bootstrap", "FORBIDDEN", "Bootstrap capability cannot read work", 403);
+            if (p.role === "coordinator" || p.role === "coordination-runtime") {
+                const co = coordinatorFor(state, p);
+                demand(p.role !== "coordination-runtime" || url.pathname === "/v1/coordination", "FORBIDDEN", "Runtime observer cannot read work data", 403);
+                if (url.pathname === "/v1/ready") {
+                    const limit = Number(url.searchParams.get("limit") ?? 20);
+                    demand(Number.isSafeInteger(limit) && limit >= 1 && limit <= 100, "INVALID_INPUT", "Invalid limit", 400);
+                    return json({ snapshot: `r${state.meta.revision}`, coordinator: co.id, current: co.currentExecution, ...readyCandidates(state, co, { limit }) });
+                }
+                if (url.pathname === "/v1/coordination")
+                    return json({ coordinator: co.id, runtimeAgent: co.runtimeAgent, run: co.run, work: co.work, title: state.work[co.work]!.title, environment: co.environment, currentExecution: co.currentExecution, state: co.state });
+            }
+            else if (p.role === "adapter") {
                 adapterAgent(state, p, p.runtimeRoot ?? "");
                 demand(url.pathname === "/v1/runtime", "FORBIDDEN", "Adapter only reads runtime identity", 403);
             }
             else if (p.role !== "operator")
                 boundExecution(state, p);
+            if (p.role === "operator" && url.pathname === "/v1/ready") {
+                const g = grantFor(state, p, text(url.searchParams.get("grant"), "grant")), environment = text(url.searchParams.get("environment"), "environment");
+                demand(g.environments.includes(environment), "FORBIDDEN", "Unregistered checkout", 403);
+                return json({ snapshot: `r${state.meta.revision}`, ...readyCandidates(state, { id: "", work: g.work, environment }) });
+            }
             if (url.pathname === "/v1/runtime") {
                 const v = runtimeView(state, p);
                 return url.searchParams.get("format") === "mermaid" ? new Response(runtimeMermaid(v), { headers: { "content-type": "text/plain", "cache-control": "no-store" } }) : json(v);

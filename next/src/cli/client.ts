@@ -1,7 +1,7 @@
 import { readdirSync, existsSync, unlinkSync, renameSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { uid, Fault } from "../domain/util.js";
-import { stateHome, atomic, readJson, type Connection } from "./files.js";
+import { uid, Fault, digest } from "../domain/util.js";
+import { stateHome, atomic, readJson, readPrivateJson, type Connection } from "./files.js";
 export type Queued = {
     id: string;
     connection: Connection;
@@ -44,7 +44,15 @@ export class Client {
         observed?: boolean;
         queue?: boolean;
     } = {}): Promise<T> {
-        return this.send<T>(options.observed ? "/v1/observations" : "/v1/commands", { schemaVersion: 1, operationId: options.id ?? uid("op"), expectedRevision: options.revision, command }, options.queue ?? false);
+        let body: unknown = { schemaVersion: 1, operationId: options.id ?? uid("op"), expectedRevision: options.revision, command };
+        if (!options.id && this.cfg.operationScope) {
+            const path = join(stateHome(), "tool-operations", `${digest({ scope: this.cfg.operationScope, command, observed: options.observed === true })}.json`);
+            if (existsSync(path))
+                body = readPrivateJson(path);
+            else
+                atomic(path, body);
+        }
+        return this.send<T>(options.observed ? "/v1/observations" : "/v1/commands", body, options.queue ?? false);
     }
     async send<T>(path: string, body: unknown, queue: boolean): Promise<T> {
         try {
