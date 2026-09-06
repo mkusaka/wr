@@ -1,0 +1,15 @@
+{
+  "name": "wr-next-local-smoke-only",
+  "main": "worker-entry.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "durable_objects": {"bindings": [{"name": "WORKSPACES", "class_name": "WorkspaceDO"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["WorkspaceDO"]}],
+  "vars": {
+    "SIGNING_SECRET": "synthetic-local-smoke-secret-not-a-production-key",
+    "ACCESS_ISSUER": "https://example.cloudflareaccess.com",
+    "ACCESS_AUDIENCE": "synthetic-smoke",
+    "WORKSPACE_MEMBERS": "{\"smoke\":[\"smoke-user\"]}"
+  }
+}

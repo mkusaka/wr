@@ -9,5 +9,5 @@
   "env": {
     "node": true
   },
-  "ignorePatterns": ["dist"]
+  "ignorePatterns": ["dist", "next"]
 }

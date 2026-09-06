@@ -1,0 +1,5 @@
+wr-next uses concepts from mkusaka/tk's structured task-list specification (MIT)
+and the wr relationship-ledger discussion. No separate tk binary or filesystem
+state is bundled. New implementation and tests were written for this successor.
+All bundled fixtures and examples are synthetic and contain no private workpad,
+business dataset, credential or transcript.

@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wr-next",
+  "main": "src/server/cloudflare.ts",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "durable_objects": { "bindings": [{ "name": "WORKSPACES", "class_name": "WorkspaceDO" }] },
+  "migrations": [{ "tag": "wr-next-v1", "new_sqlite_classes": ["WorkspaceDO"] }],
+  "vars": { "ACCESS_ISSUER": "", "ACCESS_AUDIENCE": "", "WORKSPACE_MEMBERS": "{}" }
+}

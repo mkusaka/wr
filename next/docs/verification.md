@@ -1,0 +1,31 @@
+# Verification record
+
+## Executed after integration
+
+- Bun 1.4.2, TypeScript 5.8.3, real local Git and Bun SQLite.
+- `bun ci` completed without lockfile changes.
+- `bun run verify` completed: formatting, strict type checking, safety/architecture lint, 72 tests, the minimal demo and the local integration proof.
+- `bun run test:workerd` completed against real local workerd, a SQLite-backed Durable Object and the capability gateway.
+- The existing wr CI-equivalent checks completed: format, lint, typecheck, knip, 140 tests, compile and `./dist/wr --help`.
+
+The local integration proof uses real child processes, Git hooks/commits, SQLite and HTTP. Agent activity, GitHub PR data and imported legacy orchestration data are synthetic.
+
+## Covered behavior
+
+- Work hierarchy, dependency and aggregate-cycle detection, atomic plan rollback, claims, reservations and lane capacity.
+- Idempotent operations, stale scope/generation fencing and observation authorization.
+- Result/acceptance separation, exact check subjects, revocation and upstream invalidation.
+- Process failure, no-submission exit, live-writer reservation, context rollover and resume contracts.
+- Partial commits, amend, rebase, autosquash, cherry-pick, co-author handling, chained hook behavior and uninstall.
+- PR membership history, HEAD invalidation, review/check binding and duplicate creation reconciliation.
+- Conservative legacy import, unsupported-semantics rejection, shadow comparison, cutover preconditions and rollback.
+- Access JWT verification and the Cloudflare Durable Object adapter.
+
+## Remaining external acceptance gates
+
+- A real supported agent runtime and its native hooks have not been exercised.
+- GitHub synchronization and publication have not been exercised against the live GitHub API.
+- No real legacy scope has been used for dogfood, cutover or rollback.
+- Mermaid escaping and deterministic grammar are tested, but browser rendering has not been exercised.
+
+M1 and M2 behavior is implemented and locally exercised. M3 contains runtime, GitHub and importer paths, but live interoperability remains an acceptance gate. M4 has a synthetic-scope proof only. Production replacement remains a No-Go until the external gates pass.
