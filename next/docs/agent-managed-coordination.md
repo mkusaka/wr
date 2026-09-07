@@ -170,9 +170,9 @@ await bridge.stop(false);  // advisory runtime event
 await bridge.stop(true);
 ```
 
-`delegate REF` saves a raw grant privately and returns only an assignment reference. The trusted host obtains that record and uses the existing NativeRuntimeBridge child-observe/bind boundary with actual parent/child identity. Tests cover two reversed-order native child registrations, distinct execution/capability, isolated results and parent exit. This is not a claim that the ordinary Claude/Codex/OMP native spawn path is wired up.
+`delegate REF` saves a raw grant privately and returns an opaque `spawnDirective`, never the grant token. Claude can consume one such assignment for one foreground read-only Agent/Task call: the directive is the first prompt line, `PreToolUse` records a single owner-private pending association, and `SubagentStart` combines the shared `prompt_id` with Claude's actual `agent_id`. Child tool hooks carry that `agent_id`, so `NativeRuntimeBridge` can issue an immutable child Execution context without inheriting the Coordinator context.
 
-The old `runtime.credentials` endpoint cannot bypass WorkDispatch for a coordinator root. Child native executions continue using the dedicated NativeRuntimeBridge contract; no fabricated parent Execution is required for root-issued delegation.
+Unmarked, concurrent ambiguous, background, nested or writable Claude children remain denied. The read-only child allowlist is Claude inspection tools plus bounded wr-next and Git inspection shell commands. Codex exposes `agent_id` at child start/stop but not on child tool hooks; OMP's top-level project extension lacks a stable spawn-to-child identity. Those runtimes therefore remain fail-closed for native children and should use explicit delegated `run` processes.
 
 ## Plain runtime profiles
 
@@ -186,7 +186,7 @@ Claude and Codex use permanent command hooks; OMP uses its permanent project ext
 6. Post-tool events close the matching slot. Claude additionally handles explicit permission-denied and resolved-batch events.
 7. Git hooks use the exact worker context of the shell invocation. Model CLI `report` and `done` use that same assignment.
 
-Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Background tool requests and unbound native Agent/Task/SendMessage equivalents are not silently routed to the root. Native children must use the trusted bridge.
+Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Claude may start one explicitly delegated foreground read-only child as described above. All other unbound native Agent/Task/SendMessage equivalents are denied rather than silently routed to the root.
 
 The runtime-process lookup proves only the identity under the cooperating same-user OS model. It does not infer a work item from cwd, branch, latest session or prompt text. No stable owner identity means fail closed with an explanation/fallback. Desktop/embedded/unrecognized launch layouts must use a supported bridge or `run --next` until a host identity contract exists.
 
@@ -209,9 +209,9 @@ A changed local listening port may be refreshed only after authenticating the sa
 | Plain Codex startup and per-tool hook binding | Implemented against the official rewrite contract; synthetic tool flow passed and installed Codex 0.153.4 executed start/end hooks |
 | Plain OMP startup and per-tool extension binding | Implemented; installed OMP 18.1.12 completed a model-driven add/claim/done flow with the wr-next extension loaded last |
 | Remaining provider acceptance | Real Claude and Codex tool calls; Codex tool smoke was blocked by the active account usage limit |
-| Native children | Authority + bridge contract tested; ambient provider-native spawn still guarded |
+| Native children | Claude foreground read-only Agent/Task is bound and process-tested; nested/background/writable Claude children and Codex/OMP native children remain guarded |
 | Devin | Generic supervised execution only |
-| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 223 tests and the real workerd smoke test |
+| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 224 tests and the real workerd smoke test |
 
 Codex requires `permissionDecision: allow` whenever a trusted hook returns `updatedInput`. In Codex core this marker enables the hook rewrite; the resulting input still passes through core sandbox and approval evaluation. Codex hooks and OMP extensions use last-rewrite-wins composition. A later input rewriter can remove wr-next's private dispatch prefix; the resulting CLI or Git operation fails closed as unbound rather than falling back to ambient work. OMP users with another input-rewriting extension must arrange for wr-next to load last or use an explicit trusted harness until the host offers composable input middleware.
 

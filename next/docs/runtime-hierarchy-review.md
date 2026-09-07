@@ -21,10 +21,10 @@ BunをNodeへ移行するpatchではない。Bun entrypoint、Bun SQLite、既�
 - work graphとは別にruntime treeを表示する。
 - 新しいローカルprofileではauthorityをCLIが安全に自動起動・再利用する。
 
-**未完了のもの:** 実Claude/Codex/OMP native subagentのspawn→Work対応とper-tool actor dispatchを、実際のprovider CLIへ接続して受入する部分。
-`NativeRuntimeBridge` はそのための動くharness-side APIであり、provider専用native adapterの完成を意味しない。
-通常のClaude wrapperは、対応できないnative spawning/tool executionを保守的に拒否する。native対応を装って親contextを使い回さない。
-原handoffの受入条件10「実CLIで確認」は未達であり、native subagent全体を受入済みとはしない。
+**現状:** Claudeのplain project hookでは、明示的に委譲したforeground・read-onlyのnative childを1つずつbindできる。生成hookを実行する実OSプロセスで、spawn相関、子専用Execution、tool context、完了、未割当childの観測と拒否まで確認した。
+`NativeRuntimeBridge` は引き続き汎用のharness-side APIである。Codexはchild tool hookに`agent_id`がなく、OMPはtop-level extensionからspawnとchild identityを安定して対応付けられないため、両者のnative childは拒否する。
+未完了なのは、実Claudeモデルによるchild起動の受入、Claudeのwritable・background・nested child、Codex/OMPのper-tool actor dispatchである。実Claude CLIのroot hook起動は確認したが、OAuth期限切れによりモデル呼出までは進まなかった。
+したがって、native subagent全体を受入済みとはしない。対応範囲はClaudeの明示的なread-only childに限定する。
 
 ## 検証の区別
 
@@ -257,23 +257,23 @@ root parentが既に終了していても、同じruntime root内の残存child�
 
 `runtime.child`のraw APIは観測とbindの同時指定にも対応するが、推奨するbrokerは二段階で呼び、bind失敗時の観測を保持する。
 
-## 4. Claude wrapperの挙動変更
+## 4. Claude連携の挙動
 
-これは重要な互換性上の変更。
+明示的な委譲がないchildを親Executionへ推測で帰属させない、という原則は変えていない。
 
-- PreToolUseで `Agent` / `Task` によるnative spawnを拒否する。
-- agent_idを持つ未割当childのPreToolUseを拒否する。
-- 子のPostToolUseを親publisher/committerへ帰属させない。
-- SubagentStartは警告contextのみ。SubagentStopを確定終了へ変換しない。
-- root SessionStartは既存wrapper Runへattachする。
+- 従来のwrapper event pathは、未対応の`Agent` / `Task` spawnを引き続き拒否する。
+- plain agent-managed project hookは、`wr-next delegate REF --read-only`が返す`spawnDirective`を先頭に置いたforeground Agent/Taskだけを許可する。
+- `PreToolUse`と`SubagentStart`を、同じ`prompt_id`、単一pending spawn、実`agent_id`で対応付ける。
+- bind済みchildのtool hookには、`NativeRuntimeBridge`が発行した子専用contextを渡す。
+- read-only childはClaudeの参照系toolと、限定したwr-next/Git参照commandだけを使える。
+- 未割当childもRuntimeAgentとして観測するが、Executionは作らずtool実行を拒否する。
+- `SubagentStop`はquiescentとして記録し、確定終了とは扱わない。
+- writable、background、nested childと`SendMessage`は拒否する。
 
-**このpatchを入れるだけでは、Claude native subagentを自由に使えるようにはならない。**
-安全なper-tool dispatcherがまだ接続されていないので、誤帰属を防ぐために止める。
-通常の親仕事の実行と明示的な子 `wr-next run` は利用できる。
-実nativeを使うには、利用するharnessのspawn→work相関とper-tool env注入へbrokerを接続し、実CLIで確認する必要がある。
+つまり、Claude native subagentを自由に使えるわけではない。現時点で使えるのは、明示的に委譲したforeground・read-only childだけである。通常の親仕事と、明示的な子`wr-next run`も引き続き利用できる。
 
-hookを無効化できる同一OSユーザーや、モデルがoperator credentialへ自由にアクセスできる環境に対するsandboxではない。
-標準permissionを許可に上書きする `permissionDecision=allow` は追加しない。
+hookを無効化できる同一OSユーザーや、モデルがoperator credentialへ自由にアクセスできる環境に対するsandboxではない。標準permissionを許可に上書きする`permissionDecision=allow`はClaudeには追加しない。
+
 
 ## 5. Local authorityの自動起動
 

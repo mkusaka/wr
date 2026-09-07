@@ -57,6 +57,10 @@ export class NativeRuntimeBridge {
         atomic(join(bridge.directory, response.result.runtimeRoot, "broker.json"), { version: 1, root: bridge.root, connection: adapterCfg });
         return bridge;
     }
+    /** Reuse a coordinator's private adapter capability; never expose it to model context. */
+    static fromCoordinator(cfg: Connection, root: string, directory = join(stateHome(), "native")): NativeRuntimeBridge {
+        return new NativeRuntimeBridge(cfg, root, resolve(directory));
+    }
     static async restore(receipt: string): Promise<NativeRuntimeBridge> {
         const st = lstatSync(receipt);
         demand(st.isFile() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && (!process.getuid || st.uid === process.getuid()), "UNSAFE_CONTEXT", "Broker receipt must be owner-private");

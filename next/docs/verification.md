@@ -4,7 +4,7 @@
 
 - Bun 1.4.2, TypeScript 5.8.3, real local Git and Bun SQLite.
 - `bun ci` completed without lockfile changes.
-- `bun run verify` completed: formatting, strict type checking, safety/architecture lint, 223 tests, the minimal demo and the local integration proof.
+- `bun run verify` completed: formatting, strict type checking, safety/architecture lint, 224 tests, the minimal demo and the local integration proof.
 - `bun run test:workerd` completed against real local workerd, a SQLite-backed Durable Object and the capability gateway.
 - The existing wr CI-equivalent checks completed: format, lint, typecheck, knip, 140 tests, compile and `./dist/wr --help`.
 
@@ -30,10 +30,11 @@ The local integration proof uses real child processes, Git hooks/commits, SQLite
 - Deterministic ready selection, atomic claim/retry, per-tool WorkDispatch fencing and sequential Work ownership within one Run.
 - Coordinator revocation, process-stop evidence, environment reservation retention, inherited leaf checks and schema-version-3 migration.
 - Plain Claude/Codex/OMP bootstrap contracts through generated permanent hooks or extension, including per-tool input binding and runtime-specific permission behavior.
+- Claude's explicit read-only child contract through real generated hook child processes: opaque assignment reference, serial prompt correlation, actual `agent_id`, dedicated Execution context, bounded tool allowlist, quiescent lifecycle and unassigned-child observation.
 
 ## Remaining external acceptance gates
 
-- Installed Codex 0.153.4 executed the generated SessionStart/SessionEnd hooks, but its model tool path could not run because the active account had reached its usage limit. Installed OMP 18.1.12 completed the full Coordinator flow; its ordinary user plugin stack also demonstrated the documented last-input-rewriter conflict and failed closed before claim.
+- Installed Claude Code 2.1.263 executed the generated root SessionStart hook, but its model-driven child path could not run because the local OAuth session had expired. Installed Codex 0.153.4 executed the generated SessionStart/SessionEnd hooks, but its model tool path could not run because the active account had reached its usage limit. Installed OMP 18.1.12 completed the full Coordinator flow; its ordinary user plugin stack also demonstrated the documented last-input-rewriter conflict and failed closed before claim.
 - GitHub synchronization and publication have not been exercised against the live GitHub API.
 - No real legacy scope has been used for dogfood, cutover or rollback.
 - Mermaid escaping and deterministic grammar are tested, but browser rendering has not been exercised.

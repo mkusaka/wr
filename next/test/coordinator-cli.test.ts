@@ -91,6 +91,43 @@ async function hook(name,fields={}){ const command=settings.hooks[name]?.[0]?.ho
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});`);
     return file;
 }
+function fakeClaudeChild(f: {
+    repo: string;
+}) {
+    const file = join(f.repo, "claude");
+    writeFileSync(file, `
+const {readFileSync}=require('node:fs'); const {spawn}=require('node:child_process');
+const settings=JSON.parse(readFileSync('.claude/settings.json','utf8'));
+function exec(command){const {promise,resolve,reject}=Promise.withResolvers();const p=spawn('/bin/sh',['-c',command],{env:process.env,stdio:['ignore','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.on('error',reject);p.on('close',code=>resolve({code:code??1,out,err}));return promise;}
+async function hook(name,fields={}){const command=settings.hooks[name][0].hooks[0].command;const p=spawn('/bin/sh',['-c',command],{env:process.env,stdio:['pipe','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);const {promise,resolve}=Promise.withResolvers();p.on('close',code=>resolve({code:code??1,out,err}));p.stdin.end(JSON.stringify({cwd:process.cwd(),session_id:'native-session',hook_event_name:name,...fields}));const result=await promise;return {...result,json:result.out.trim()?JSON.parse(result.out):{}};}
+async function rootBash(id,command){const pre=await hook('PreToolUse',{prompt_id:'root-turn',tool_name:'Bash',tool_use_id:id,tool_input:{command}});if(pre.json.hookSpecificOutput?.permissionDecision==='deny')throw new Error(pre.json.hookSpecificOutput.permissionDecisionReason);const result=await exec(pre.json.hookSpecificOutput.updatedInput.command);await hook(result.code===0?'PostToolUse':'PostToolUseFailure',{prompt_id:'root-turn',tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}});if(result.code!==0)throw new Error(result.err);return result;}
+(async()=>{
+await hook('SessionStart',{source:'startup'});
+const added=JSON.parse((await rootBash('add',"wr-next add 'Child review'")).out);
+const delegated=JSON.parse((await rootBash('delegate',\`wr-next delegate \${added.result.id} --role reviewer --read-only\`)).out);
+const missing=await hook('PreToolUse',{prompt_id:'missing-turn',tool_name:'Agent',tool_use_id:'missing-agent',tool_input:{prompt:'No assignment\\nReview'}});if(missing.json.hookSpecificOutput?.permissionDecision!=='deny')throw new Error('unassigned native spawn was not denied');
+const agentInput={description:'Review child',subagent_type:'Explore',prompt:delegated.spawnDirective+'\\nReview the assigned work and submit a result.'};
+const agentPre=await hook('PreToolUse',{prompt_id:'child-turn',tool_name:'Agent',tool_use_id:'agent-tool',tool_input:agentInput});
+if(agentPre.json.hookSpecificOutput?.permissionDecision==='deny')throw new Error(agentPre.json.hookSpecificOutput.permissionDecisionReason);
+const started=await hook('SubagentStart',{prompt_id:'child-turn',agent_id:'child-1',agent_type:'Explore'});
+if(!started.json.hookSpecificOutput?.additionalContext?.includes('working on'))throw new Error('child assignment guidance missing: '+JSON.stringify(started));
+const childWrite=await hook('PreToolUse',{prompt_id:'child-turn',agent_id:'child-1',agent_type:'Explore',tool_name:'Bash',tool_use_id:'child-write',tool_input:{command:'printf forbidden'}});
+if(childWrite.json.hookSpecificOutput?.permissionDecision!=='deny')throw new Error('read-only child arbitrary shell was not denied');
+const command="wr-next done --summary 'Native review completed'";
+const childPre=await hook('PreToolUse',{prompt_id:'child-turn',agent_id:'child-1',agent_type:'Explore',tool_name:'Bash',tool_use_id:'child-tool',tool_input:{command}});
+if(childPre.json.hookSpecificOutput?.permissionDecision==='deny')throw new Error(childPre.json.hookSpecificOutput.permissionDecisionReason);
+const childResult=await exec(childPre.json.hookSpecificOutput.updatedInput.command);
+await hook(childResult.code===0?'PostToolUse':'PostToolUseFailure',{prompt_id:'child-turn',agent_id:'child-1',agent_type:'Explore',tool_name:'Bash',tool_use_id:'child-tool',tool_input:{command},tool_response:{stdout:childResult.out,is_error:childResult.code!==0}});
+const rogueStart=await hook('SubagentStart',{prompt_id:'rogue-turn',agent_id:'rogue-child',agent_type:'Explore'});
+const roguePre=await hook('PreToolUse',{prompt_id:'rogue-turn',agent_id:'rogue-child',agent_type:'Explore',tool_name:'Bash',tool_use_id:'rogue-tool',tool_input:{command:'wr-next status'}});
+if(roguePre.json.hookSpecificOutput?.permissionDecision!=='deny')throw new Error('observed unassigned child tool was not denied');
+await hook('SubagentStop',{prompt_id:'rogue-turn',agent_id:'rogue-child',agent_type:'Explore',last_assistant_message:'Unassigned'});
+await hook('SubagentStop',{prompt_id:'child-turn',agent_id:'child-1',agent_type:'Explore',last_assistant_message:'Finished'});
+await hook('PostToolUse',{prompt_id:'root-turn',tool_name:'Agent',tool_use_id:'agent-tool',tool_input:agentInput,tool_response:{stdout:'Finished',is_error:false}});
+console.log(JSON.stringify({added,delegated,missing,started,childWrite,childPre,childResult,rogueStart,roguePre}));
+})().catch(error=>{console.error(error.stack);process.exitCode=1});`);
+    return file;
+}
 function fakeOmp(f: {
     repo: string;
 }, commands: string[]) {
@@ -181,6 +218,75 @@ test("plain Claude process uses actual installed hooks and per-tool contexts wit
         assert.equal(Object.values(state.work).find(w => w.title === "A new user request")!.state, "done");
         assert.equal(Object.values(state.runs)[0]!.state, "unknown"); // SessionEnd is advisory.
         assert.ok(!result.stdout.includes("wn1."));
+    }
+    finally {
+        await f.close();
+    }
+});
+test("plain Claude binds one explicitly delegated native child without parent context inheritance", async () => {
+    const f = await fixture();
+    try {
+        await init(f);
+        const fake = fakeClaudeChild(f);
+        const result = await run([fake], f.repo, f.env);
+        assert.equal(result.code, 0, result.stderr);
+        const output = JSON.parse(result.stdout) as {
+            missing: {
+                json: {
+                    hookSpecificOutput: {
+                        permissionDecision: string;
+                    };
+                };
+            };
+            started: {
+                json: {
+                    hookSpecificOutput: {
+                        additionalContext: string;
+                    };
+                };
+            };
+            childPre: {
+                json: {
+                    hookSpecificOutput: {
+                        updatedInput: {
+                            command: string;
+                        };
+                    };
+                };
+            };
+            childWrite: {
+                json: {
+                    hookSpecificOutput: {
+                        permissionDecision: string;
+                    };
+                };
+            };
+            childResult: CommandResult;
+            roguePre: {
+                json: {
+                    hookSpecificOutput: {
+                        permissionDecision: string;
+                    };
+                };
+            };
+        };
+        assert.equal(output.missing.json.hookSpecificOutput.permissionDecision, "deny");
+        assert.match(output.started.json.hookSpecificOutput.additionalContext, /working on/i);
+        assert.equal(output.childWrite.json.hookSpecificOutput.permissionDecision, "deny");
+        assert.equal(output.roguePre.json.hookSpecificOutput.permissionDecision, "deny");
+        assert.match(output.childPre.json.hookSpecificOutput.updatedInput.command, /WR_NEXT_CONTEXT=/);
+        assert.equal(output.childResult.code, 0, output.childResult.stderr);
+        const state = f.server.workspace.store.snapshot();
+        const work = Object.values(state.work).find(item => item.title === "Child review")!;
+        const child = Object.values(state.runtimeAgents).find(agent => agent.externalAgentId === "child-1")!;
+        const rogue = Object.values(state.runtimeAgents).find(agent => agent.externalAgentId === "rogue-child")!;
+        assert.equal(work.state, "done");
+        assert.equal(child.parent, Object.values(state.runtimeAgents).find(agent => agent.parent === null)!.id);
+        assert.ok(child.execution);
+        assert.equal(state.executions[child.execution!]!.work, work.id);
+        assert.equal(rogue.execution, null);
+        assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
+        assert.deepEqual(readdirSync(join(f.home, "assignments")), []);
     }
     finally {
         await f.close();

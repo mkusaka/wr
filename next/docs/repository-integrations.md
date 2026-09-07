@@ -11,10 +11,9 @@ Keep three separate responsibilities:
 |---|---|
 | `init` / integrations | Static instrumentation and safe ownership of its configuration entries |
 | `run` / attach-capable harness | Dynamic Work/Run/Execution/capability binding |
-| Runtime events | Observation, startup guidance, and rejection of unbound managed actors |
+| Runtime events | Observation, startup guidance, exact root tool dispatch, and supported child binding |
 
-A hook installer is not a work allocator, hook trust approver, native actor dispatcher, or completion evaluator.
-`run` is still useful for process ownership, explicit work binding, and generic workers. Native harnesses can keep using `NativeRuntimeBridge`; every agent is not required to be an independently wrapped subprocess.
+A static hook installer is not a work allocator, hook trust approver or completion evaluator. The Claude event adapter can dispatch one explicitly delegated read-only child because Claude exposes both child lifecycle IDs and `agent_id` on child tool events. `run` remains useful for process ownership, writable work, explicit binding and generic workers. Other native harnesses can use `NativeRuntimeBridge`; every agent is not required to be an independently wrapped subprocess.
 
 ## Normal interface
 
@@ -88,9 +87,9 @@ Run binding is supplied privately via the environment. `WR_NEXT_RUNTIME_KIND` se
 
 | Runtime | Static configuration | Implemented event path | Native child binding |
 |---|---|---|---|
-| Claude | `.claude/settings.json` | Plain Coordinator bootstrap, exact per-tool dispatch, compact window and advisory shutdown | Requires trusted harness; unbound native children are denied |
-| Codex | `.codex/hooks.json` | Plain Coordinator bootstrap and exact per-tool rewrite using the documented control marker | Requires trusted harness; spawn/child calls are guarded |
-| OMP | `.omp/extensions/wr-next.ts` | Plain Coordinator bootstrap, revised tool input, compact window and advisory shutdown | Requires trusted harness; native task invocation is guarded |
+| Claude | `.claude/settings.json` | Plain Coordinator bootstrap, exact per-tool dispatch, compact window and advisory shutdown | One explicit foreground read-only Agent/Task; serial start correlation; nested/background/writable children denied |
+| Codex | `.codex/hooks.json` | Plain Coordinator bootstrap and exact per-tool rewrite using the documented control marker | Guarded: lifecycle exposes `agent_id`, but child tool hooks do not expose a verified child actor |
+| OMP | `.omp/extensions/wr-next.ts` | Plain Coordinator bootstrap, revised tool input, compact window and advisory shutdown | Guarded: the project extension has no stable spawn-to-child lifecycle identity |
 | Devin | No native file generated | Generic process lifecycle and existing Git/PR provenance | Not claimed |
 | Generic | No native file required | Explicit subprocess lifecycle | Not claimed |
 
@@ -101,6 +100,7 @@ These are implementation/contract-test statements, not live CLI compatibility ce
 Use the shared project file as the standard source. Preserve unrelated settings, matchers, and hooks, including user handlers later added beside a managed handler. Detect wr-next hooks or disabling policies in `.claude/settings.local.json` before installation; do not rewrite that file.
 
 The explicit `run --runtime claude --isolated` path generates an ephemeral settings file. Source-mode gating prevents installed project wr-next callbacks from handling that isolated run a second time. It does not disable other user hooks or sandbox the process.
+For a native read-only child, the Coordinator first runs `wr-next delegate REF --read-only`. The returned `spawnDirective` must be the first line of exactly one foreground Agent prompt. `PreToolUse` records one owner-private pending association; `SubagentStart` consumes it using the shared `prompt_id` and actual `agent_id`; child `PreToolUse` then receives a dedicated `NativeRuntimeBridge` context. The child may use Claude inspection tools plus bounded wr-next/Git inspection shell commands. Unmarked or concurrent ambiguous starts fail closed.
 
 ### Codex
 

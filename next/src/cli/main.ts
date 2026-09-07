@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { Client, syncOutbox, pendingCount } from "./client.js";
-import { managedContext, coordinatorConnection, context, stateHome, atomic, readJson, type Connection } from "./files.js";
+import { managedContext, coordinatorTool, context, stateHome, atomic, readJson, type Connection } from "./files.js";
 import { Fault, demand, uid } from "../domain/util.js";
 import { runWork } from "./run.js";
 import { processIdentity } from "../runtime/process.js";
@@ -30,7 +30,7 @@ const help = `wr-next — isolated work coordination and provenance
   ready | next [--claim]                  Inspect or atomically select scoped work
   claim [REF] [--retry --reason TEXT]     Bind current agent, no human ID required
   yield --reason TEXT                    Release work at the next tool boundary
-  delegate REF [--role ROLE]             Scoped assignment for a trusted harness
+  delegate REF [--role ROLE] [--read-only]  Scoped assignment for a native child
   management status|disable              Private repository authorization
   run [W | --next] [--runtime generic|claude|codex|omp|devin] [--isolated] [--read-only] [--role ROLE] -- COMMAND...
   status [W] [--format json] [--since CURSOR]
@@ -274,7 +274,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     demand(known.has(cmd), "INVALID_ARGUMENT", `Unknown command ${cmd}; run --help`, 400);
     const { ensureConnection } = await import("./authority.js");
     const resolved = await ensureConnection();
-    const co = coordinatorConnection();
+    const coordinator = coordinatorTool(), co = coordinator?.coordinator ?? null;
     const control = ["add", "plan", "ready", "next", "claim", "yield", "delegate", "agents", "graph", "cancel", "hold", "status", "export"].includes(cmd);
     const cfg = control && co ? co : resolved, client = new Client(cfg);
     if (cmd === "management") {
@@ -315,11 +315,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (cmd === "delegate") {
         demand(sub, "INVALID_ARGUMENT", "Select a ref from ready for a deliberate delegation");
-        const response = await client.command({ type: "delegation.issue", work: sub, objective: opt(a, "description") ?? "Delegated ready work", role: opt(a, "role") ?? "implementer", mode: a.opts["read-only"] ? "read" : "write" });
-        // The raw grant stays in private storage for a trusted native dispatcher.
+        const role = opt(a, "role") ?? "implementer", mode = a.opts["read-only"] ? "read" : "write";
+        const response = await client.command({ type: "delegation.issue", work: sub, objective: opt(a, "description") ?? "Delegated ready work", role, mode });
+        // The raw grant stays in private storage. The model passes only this opaque reference.
         const file = join(stateHome(), "assignments", `${response.result.id}.json`);
-        atomic(file, { ...response.result, coordinator: co });
-        json({ assignment: response.result.id, work: sub, state: "issued", nextAction: "Hand the assignment reference to the trusted native adapter; no child is started by this command." });
+        atomic(file, { ...response.result, work: sub, role, mode, coordinator: coordinator ? { coordinator: coordinator.coordinator.coordinator, runtimeAgent: coordinator.coordinator.runtimeAgent } : null });
+        json({ assignment: response.result.id, work: sub, state: "issued", spawnDirective: `WR_NEXT_ASSIGNMENT=${response.result.id}`, nextAction: mode === "read" ? "Put spawnDirective on the first line of one supported native child prompt. It is a reference, not a credential." : "Pass the private assignment reference to an attach-capable NativeRuntimeBridge; project hooks do not bind writable native children." });
         return 0;
     }
     if (cmd === "run") {
