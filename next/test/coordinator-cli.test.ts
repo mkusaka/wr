@@ -137,11 +137,57 @@ const {spawnSync}=require('node:child_process');
 function exec(command){const result=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});return {code:result.status??1,out:result.stdout??'',err:result.stderr??''};}
 (async()=>{
 // This generated host intentionally loads the generated project extension through OMP's runtime-discovery boundary.
-const {default:install}=await import('./.omp/extensions/wr-next.ts');const handlers=new Map();install({on:(name,handler)=>handlers.set(name,handler)});
-const ctx={cwd:process.cwd(),sessionManager:{getSessionId:()=> 'fixture-session'},ui:{notify:(message)=>{throw new Error(message)}}};
+const {default:install}=await import('./.omp/extensions/wr-next.ts');
+const handlers=new Map();install({pi:{VERSION:'17.0.0'},on:(name,handler)=>handlers.set(name,handler)});const ctx={cwd:process.cwd(),sessionManager:{getSessionId:()=> 'omp-session'},ui:{notify:(message)=>{throw new Error(message)}}};
 await handlers.get('session_start')({},ctx);const prompt=await handlers.get('before_agent_start')({},ctx);if(!prompt?.message?.content?.includes('coordinate work'))throw new Error('coordinator guidance missing');
 const calls=[];for(let i=0;i<${JSON.stringify(commands)}.length;i++){const command=${JSON.stringify(commands)}[i],toolCallId='tool-'+i,input={command};const decision=await handlers.get('tool_call')({toolName:'bash',toolCallId,input},ctx);if(decision?.block)throw new Error(decision.reason);const actual=decision?.input?.command??command;const result=exec(actual);await handlers.get('tool_result')({toolName:'bash',toolCallId,input:decision?.input??input,isError:result.code!==0,content:[{type:'text',text:result.out||result.err}]},ctx);calls.push({command,actual,result});}
 await handlers.get('session_shutdown')({},ctx);console.log(JSON.stringify(calls));})().catch(error=>{console.error(error.stack);process.exitCode=1});`);
+    return file;
+}
+function fakeOmpUnenrolledTask(f: {
+    repo: string;
+}) {
+    const file = join(f.repo, "omp");
+    writeFileSync(file, `
+(async()=>{
+const {default:install}=await import('./.omp/extensions/wr-next.ts');
+require('node:fs').writeFileSync('parent.jsonl','');
+function host(session,file){const handlers=new Map();install({pi:{VERSION:'17.0.0'},on:(name,handler)=>handlers.set(name,handler)});return{handlers,ctx:{cwd:process.cwd(),sessionManager:{getSessionId:()=>session,getSessionFile:()=>file},ui:{notify:(message)=>{throw new Error(message)}}}};}
+async function call(host,name,event={}){return await host.handlers.get(name)(event,host.ctx);}
+const root=host('root','parent.jsonl');await call(root,'session_start');const child=host('child','parent/child.jsonl');await call(child,'session_start');const task=await call(child,'tool_call',{toolName:'task',toolCallId:'task',input:{task:'unmanaged'}});const read=await call(child,'tool_call',{toolName:'read',toolCallId:'read',input:{path:'package.json'}});console.log(JSON.stringify({taskBlocked:Boolean(task?.block),readBlocked:Boolean(read?.block)}));
+})().catch(error=>{console.error(error.stack);process.exitCode=1;});`);
+    return file;
+}
+function fakeOmpChild(f: {
+    repo: string;
+}) {
+    const file = join(f.repo, "omp");
+    writeFileSync(file, `
+const {spawn}=require('node:child_process');const {mkdirSync,writeFileSync}=require('node:fs');
+function exec(command){return new Promise((resolve,reject)=>{const p=spawn('/bin/sh',['-c',command],{env:process.env,stdio:['ignore','pipe','pipe']});let out='',err='';p.stdout.on('data',b=>out+=b);p.stderr.on('data',b=>err+=b);p.on('error',reject);p.on('close',code=>resolve({code:code??1,out,err}));});}
+(async()=>{
+const {default:install}=await import('./.omp/extensions/wr-next.ts');
+function host(session,file){const handlers=new Map(),listeners=new Map();install({pi:{VERSION:'18.1.13'},events:{on:(channel,handler)=>{const rows=listeners.get(channel)??[];rows.push(handler);listeners.set(channel,rows);return()=>{};}},on:(name,handler)=>handlers.set(name,handler)});const ctx={cwd:process.cwd(),sessionManager:{getSessionId:()=>session,getSessionFile:()=>file},ui:{notify:(message)=>{throw new Error(message)}}};return{handlers,listeners,ctx,emit:async(channel,event)=>{for(const handler of listeners.get(channel)??[])await handler(event);}};}
+async function call(host,name,event={}){return await host.handlers.get(name)(event,host.ctx);}
+async function bash(host,id,command){const pre=await call(host,'tool_call',{toolName:'bash',toolCallId:id,input:{command}});if(pre?.block)throw new Error(pre.reason);const result=await exec(pre?.input?.command??command);await call(host,'tool_result',{toolName:'bash',toolCallId:id,input:pre?.input??{command},isError:result.code!==0,content:[{type:'text',text:result.out||result.err}]});return result;}
+
+writeFileSync('root-session.jsonl','');mkdirSync('root-session');const root=host('root-session','root-session.jsonl');await call(root,'session_start');
+mkdirSync('unknown-parent');writeFileSync('unknown-parent.jsonl','');const unknown=host('unknown-session','unknown-parent/unknown-child.jsonl');await call(unknown,'session_start');const unbound=await call(unknown,'tool_call',{toolName:'read',toolCallId:'unknown-read',input:{path:'package.json'}});if(!unbound?.block)throw new Error('unbound task child bootstrapped a root Coordinator');
+const added=JSON.parse((await bash(root,'add',"wr-next add 'OMP child review'")).out);
+const delegated=JSON.parse((await bash(root,'delegate',\`wr-next delegate \${added.result.id} --role reviewer --read-only\`)).out);
+const taskInput={name:'NativeTaskChild',agent:'reviewer',task:delegated.spawnDirective+'\\nInspect the assigned work and report it.'};
+const taskPre=await call(root,'tool_call',{toolName:'task',toolCallId:'omp-task',input:taskInput});if(taskPre?.block)throw new Error(taskPre.reason);
+await root.emit('task:subagent:lifecycle',{id:'NativeTaskChild',agent:'reviewer',agentSource:'bundled',parentToolCallId:'omp-task',index:0,status:'started',sessionFile:'root-session/NativeTaskChild.jsonl'});
+const child=host('child-session','root-session/NativeTaskChild.jsonl');await call(child,'session_start');const guidance=await call(child,'before_agent_start');if(!guidance?.message?.content?.includes('working on'))throw new Error('child binding guidance missing');
+const read=await call(child,'tool_call',{toolName:'read',toolCallId:'child-read',input:{path:'package.json'}});if(read?.block)throw new Error(read.reason);
+const hub=await call(child,'tool_call',{toolName:'hub',toolCallId:'child-hub',input:{op:'list'}});if(hub?.block)throw new Error(hub.reason);
+const write=await call(child,'tool_call',{toolName:'write',toolCallId:'child-write',input:{path:'forbidden',content:'forbidden'}});if(!write?.block)throw new Error('write-capable native child tool was not denied');
+const arbitrary=await call(child,'tool_call',{toolName:'bash',toolCallId:'child-arbitrary',input:{command:'printf forbidden'}});if(!arbitrary?.block)throw new Error('arbitrary child shell was not denied');
+const done=await bash(child,'child-done',"wr-next done --summary 'OMP child review completed'");if(done.code!==0)throw new Error(done.err);
+const yielded=await call(child,'tool_call',{toolName:'yield',toolCallId:'child-yield',input:{data:{summary:'review complete'}}});if(yielded?.block)throw new Error('native child result submission was blocked');
+await root.emit('task:subagent:lifecycle',{id:'NativeTaskChild',agent:'reviewer',agentSource:'bundled',parentToolCallId:'omp-task',index:0,status:'completed',sessionFile:'root-session/NativeTaskChild.jsonl'});await call(root,'tool_result',{toolName:'task',toolCallId:'omp-task',input:taskInput,isError:false,content:[{type:'text',text:'started'}]});await call(root,'session_shutdown');
+console.log(JSON.stringify({taskPre:taskPre??{},guidance,unbound,read:read??{},hub:hub??{},write,arbitrary,done}));
+})().catch(error=>{console.error(error.stack);process.exitCode=1;});`);
     return file;
 }
 test("explicit init creates private enrollment; static init alone grants nothing", async () => {
@@ -321,6 +367,67 @@ test("plain OMP process coordinates through its project extension and revised to
         const state = f.server.workspace.store.snapshot();
         assert.equal(Object.values(state.work).find(work => work.title === "OMP request")!.state, "done");
         assert.equal(Object.values(state.runs)[0]!.runtime, "omp");
+        assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
+    }
+    finally {
+        await f.close();
+    }
+});
+test("unenrolled OMP native task children remain inert across version mismatch", async () => {
+    const f = await fixture();
+    try {
+        await init(f, false, "omp");
+        const result = await run([fakeOmpUnenrolledTask(f)], f.repo, f.env);
+        assert.equal(result.code, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), { taskBlocked: false, readBlocked: false });
+        assert.equal(Object.keys(f.server.workspace.store.snapshot().runtimeAgents).length, 0);
+    }
+    finally {
+        await f.close();
+    }
+});
+test("OMP task lifecycle binds the exact child session and preserves native hub conversations", async () => {
+    const f = await fixture();
+    try {
+        await init(f, true, "omp");
+        const fake = fakeOmpChild(f);
+        const result = await run([fake], f.repo, f.env);
+        assert.equal(result.code, 0, result.stderr);
+        const output = JSON.parse(result.stdout) as {
+            guidance: {
+                message: {
+                    content: string;
+                };
+            };
+            unbound: {
+                block: boolean;
+            };
+            read: {
+                block?: boolean;
+            };
+            hub: {
+                block?: boolean;
+            };
+            write: {
+                block: boolean;
+            };
+            arbitrary: {
+                block: boolean;
+            };
+            done: CommandResult;
+        };
+        assert.match(output.guidance.message.content, /working on/i);
+        assert.equal(output.unbound.block, true);
+        assert.equal(output.read.block, undefined);
+        assert.equal(output.hub.block, undefined);
+        assert.equal(output.write.block, true);
+        assert.equal(output.arbitrary.block, true);
+        assert.equal(output.done.code, 0, output.done.stderr);
+        const state = f.server.workspace.store.snapshot();
+        const child = Object.values(state.runtimeAgents).find(agent => agent.externalAgentId === "NativeTaskChild")!;
+        assert.ok(child.execution);
+        assert.equal(state.executions[child.execution!]!.work, Object.values(state.work).find(work => work.title === "OMP child review")!.id);
+        assert.equal(child.state, "quiescent");
         assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
     }
     finally {

@@ -1,3 +1,3 @@
 import { commandHookAdapter } from "./contract.js";
-/** omp project profile. Native work assignment still requires a trusted dispatcher. */
+/** OMP project profile. Native task binding is supplied only by the version-gated project extension. */
 export const ompAdapter = commandHookAdapter("omp", ["task", "Task", "Agent", "spawn_agent"]);

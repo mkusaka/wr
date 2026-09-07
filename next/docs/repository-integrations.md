@@ -88,8 +88,8 @@ Run binding is supplied privately via the environment. `WR_NEXT_RUNTIME_KIND` se
 | Runtime | Static configuration | Implemented event path | Native child binding |
 |---|---|---|---|
 | Claude | `.claude/settings.json` | Plain Coordinator bootstrap, exact per-tool dispatch, compact window and advisory shutdown | One explicit foreground read-only Agent/Task; serial start correlation; nested/background/writable children denied |
-| Codex | `.codex/hooks.json` | Plain Coordinator bootstrap and exact per-tool rewrite using the documented control marker | Guarded: lifecycle exposes `agent_id`, but child tool hooks do not expose a verified child actor |
-| OMP | `.omp/extensions/wr-next.ts` | Plain Coordinator bootstrap, revised tool input, compact window and advisory shutdown | Guarded: the project extension has no stable spawn-to-child lifecycle identity |
+| Codex | `.codex/hooks.json` | Plain Coordinator bootstrap and exact per-tool rewrite using the documented control marker | Guarded pending spawn correlation: local Codex source does include `agent_id` on child tool hooks |
+| OMP | `.omp/extensions/wr-next.ts` | Plain Coordinator bootstrap, revised tool input, compact window and advisory shutdown | OMP 18.1.13: explicitly delegated read-only native `task` children, preserving native `hub` conversation |
 | Devin | No native file generated | Generic process lifecycle and existing Git/PR provenance | Not claimed |
 | Generic | No native file required | Explicit subprocess lifecycle | Not claimed |
 
@@ -111,6 +111,16 @@ Plain agent-managed startup uses Codex's required `permissionDecision: allow` ma
 
 The TOML conflict detector is intentionally conservative, not a general TOML parser. Quoted/exotic structures that bypass a simple detector remain a live-settings concern; the installer does not claim full effective configuration analysis.
 
+Codex source inspected at `ca6fb194b695dda38d8ccfcb5871b4dbd334b960` corrected the earlier missing-identity claim: `core/src/hook_runtime.rs` puts `SubagentHookContext` on child `PreToolUse`, with `agent_id = sess.thread_id()`. The remaining ordering problem is that the child can execute before the parent's spawn `PostToolUse` returns its `agent_id`. A safe adapter needs exact pre-execution spawn correlation or a child gate; it must not choose the latest pending spawn. `wr-next run` is an independent-worker fallback, not a replacement for native messaging.
+
+The minimal fork keeps native spawn and messaging intact. Add optional persisted `spawn_tool_use_id` to `SubAgentSource::ThreadSpawn`; derive `parent_agent_id` from its existing `parent_thread_id`. Populate both native spawn implementations, preserve the field through source reconstruction/resume, and serialize both fields in `SubagentStart` and child tool hooks. The startup hook is awaited before the child turn, so `(root session, parent actor, spawn call)` can select the exact private assignment before the first hooked child tool. Old histories without lineage stay unbound.
+
+Relevant Codex files are `protocol/src/protocol.rs`, `core/src/tools/handlers/multi_agents_common.rs`, both native spawn handlers, `core/src/agent/control/spawn.rs`, `core/src/hook_runtime.rs`, and `hooks/src/events/{common,session_start,pre_tool_use}.rs`. Source tests in `core/tests/suite/subagent_notifications.rs` and app-server `tests/suite/v2/turn_start.rs` cover the surrounding lifecycle. A fork acceptance test must additionally cover concurrent reversed-order starts, nested actors, resume, both multi-agent versions and absent old-history lineage.
+
+Stock hooks are not a hard authorization boundary: `hooks/src/events/pre_tool_use.rs` leaves `should_block=false` for runner failure, malformed JSON and ordinary nonzero exit. A designated fail-closed synchronous hook policy would be a separate opt-in fork change; do not change all unrelated hooks globally. App-server collaboration events expose sender/receiver thread IDs but arrive as observations, not a pre-first-tool authorization latch.
+
+Hook-facing names are version-sensitive. In the inspected checkout, `spawn_agent` is canonical and `Agent` is only its matcher alias. MAv1 control tools serialize as `multi_agent_v1send_input`, `multi_agent_v1resume_agent`, `multi_agent_v1close_agent` and `multi_agent_v1wait_agent` (without a separator). MAv2 spawn results return a task name rather than the MAv1 child UUID; the MAv1 post-result mapping must not be generalized blindly. These are source findings, not compatibility certification for an installed Codex binary. No Codex fork has been created or published.
+
 ### OMP
 
 Use the primary project's **extension** API, not guessed `.omp/hooks/pre` paths or a different fork's API. The generated module exports a default factory and registers through `pi.on(...)`.
@@ -120,6 +130,12 @@ Native extension discovery in the reviewed upstream documentation is **cwd-only*
 Cross-provider discovery is not proof that every provider integration is executed. Regardless, wr-next callbacks from the wrong `--source` are inert before reading private state. The OMP factory additionally deduplicates on the host API instance, not a process-global marker that would disable legitimate reloads. Existing unrelated extensions remain untouched.
 
 For agent-managed startup, OMP's extension returns the dispatch-prefixed input from `tool_call`. OMP revalidates and schedules that revised input before its normal approval gate; no process-global environment mutation switches concurrent tools.
+
+OMP 18.1.13's public `task:subagent:lifecycle` event supplies the actual child ID, parent tool-call ID, batch index and child session file before child startup. The extension records each `task` prompt's explicit assignment and matches the child's `session_start` to that exact tuple. Each child receives its own runtime actor and Execution; no cwd/latest-child guess or process-global context switch is used. An unmatched child session is denied rather than bootstrapped as a root.
+
+Delegate each Work with `wr-next delegate REF --read-only`, then put its returned `spawnDirective` on the first line of the corresponding native `task.tasks[].task`. The built-in tool still creates the children. Native `hub` peer send/list/inbox/wait remains available to both root and children, including sibling conversation. Children retain native `yield` for incremental and terminal result submission. Bounded inspection and wr-next/Git inspection shell commands are allowed; writes, arbitrary shell, eval, nested spawning and process-control hub operations are denied. The native binding is version-gated to 18.1.13; other versions retain root integration but cannot use this native task profile. Unenrolled installations remain inert.
+
+Installed OMP 18.1.13 was exercised with two concurrent native children and native root/child and sibling messaging, using `--no-extensions -e .omp/extensions/wr-next.ts` to isolate the extension. Other input rewriters still require wr-next to load last. This is not acceptance of arbitrary plugin stacks or writable/nested child profiles.
 
 ## Installation safety
 

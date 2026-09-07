@@ -45,7 +45,7 @@ wr-next integrations sync
 wr-next integrations uninstall codex
 ```
 
-Installation, actual loading/trust, and native subagent binding are separate statuses. `init` does not claim all three are equally ready. Claude supports one explicitly delegated foreground read-only child at a time; Codex and OMP native children remain guarded. See [repository integrations](docs/repository-integrations.md) for worktree handling, conflict recovery, and runtime limitations.
+Installation, actual loading/trust, and native subagent binding are separate statuses. `init` does not claim all three are equally ready. Claude supports one explicitly delegated foreground read-only child at a time. OMP 18.1.13 supports explicitly delegated concurrent read-only native task children with native hub conversation. Codex native children remain guarded pending spawn correlation. See [repository integrations](docs/repository-integrations.md) for worktree handling, conflict recovery, and runtime limitations.
 
 ## Agent-managed coordination
 
@@ -90,7 +90,7 @@ wr-next run W2 -- claude
 
 `run` infers the adapter from an exact executable basename (`claude`, `codex`, `omp`, `devin`). Custom wrappers can use `--runtime NAME`. It binds work, reserves the environment, creates Run/Execution, and injects private per-process context. Normal launches do **not** rewrite project files or add `--settings`.
 
-Claude and Codex use their permanent project hooks; OMP uses its native extension. The adapters cover root lifecycle/startup guidance and targeted PR observations. Claude can bind one foreground read-only child after `wr-next delegate REF --read-only`; put the returned `spawnDirective` on the first line of the Agent prompt. Unmarked, nested, background, writable, Codex, and OMP native spawning remains denied rather than attributed to the parent. Devin is wrapper-only. Generic explicit subprocess execution remains available with `--runtime generic`.
+Claude and Codex use their permanent project hooks; OMP uses its native extension. The adapters cover root lifecycle/startup guidance and targeted PR observations. Claude can bind one foreground read-only child after `wr-next delegate REF --read-only`; put the returned `spawnDirective` on the first line of the Agent prompt. OMP 18.1.13 consumes one such directive per native `task.tasks[].task` and preserves root/child and sibling `hub` conversation. Unmarked, nested, writable, Codex, and background Claude spawning remains denied rather than attributed to the parent. Devin is wrapper-only. Generic explicit subprocess execution remains available with `--runtime generic`, but does not replace native messaging.
 
 OMP project extension discovery is cwd-local: launch from the initialized worktree root. Git worktrees have their own files; commit the shared static configuration or initialize each worktree explicitly. `run --worktree NEW_PATH` does not copy/overwrite integration files. If the new checkout lacks them, initialize it and then run from there; no work is claimed until preflight succeeds.
 

@@ -55,7 +55,7 @@ export async function enableAgentManagement(cwd: string, cfg: Connection, option
     const runtimes = ["generic", ...Object.entries(config.integrations).filter(([, enabled]) => enabled).map(([name]) => name)];
     const output = await new Client(cfg).command<any>({ type: "coordination.enable", repository, environment, title: basename(root), runtimes, work: options.work, checks: options.checks });
     atomic(registrationPath(root), { version: 1, root, repository, environment, work: output.result.work, grant: output.result.grant, bootstrap: capabilityConnection(cfg, output.bootstrap), ...(cfg.localAuthority ? { localAuthority: { database: cfg.localAuthority.database, fingerprint: digest({ token: cfg.token, workspace: cfg.workspace, device: cfg.device }) } } : {}) } satisfies AgentRegistration);
-    return { enabled: true, scope: output.result.work, nativeBootstrap: "claude", others: "run --next or trusted harness; not claimed as native bootstrap" };
+    return { enabled: true, scope: output.result.work, nativeBootstrap: runtimes.filter(runtime => ["claude", "codex", "omp"].includes(runtime)), note: "Configured root profiles; actual hook loading and child binding have separate acceptance boundaries." };
 }
 export async function disableAgentManagement(cwd: string, cfg: Connection, reason: string): Promise<unknown> {
     const reg = readRegistration(cwd);

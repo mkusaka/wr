@@ -73,6 +73,13 @@ type PendingChild = {
     session: string;
     toolId: string;
 };
+type OmpPendingChildren = {
+    version: 1;
+    parentRuntimeAgent: string;
+    session: string;
+    toolId: string;
+    assignments: string[];
+};
 type BoundChild = {
     version: 1;
     bound: boolean;
@@ -81,9 +88,17 @@ type BoundChild = {
     runtimeRoot: string;
     session: string;
 };
+type OmpBoundChild = BoundChild & {
+    parentSession: string;
+    parentToolId: string;
+    index: number;
+    assignmentId: string;
+};
 const coordinatorDirectory = (bridge: CoordinatorBridge) => dirname(bridge.contextFile);
 const pendingChildPath = (bridge: CoordinatorBridge) => join(coordinatorDirectory(bridge), "native-child.pending.json");
+const ompPendingChildrenPath = (bridge: CoordinatorBridge, toolId: string) => join(coordinatorDirectory(bridge), "omp-native-children", `${digest(toolId)}.json`);
 const boundChildPath = (bridge: CoordinatorBridge, agentId: string) => join(coordinatorDirectory(bridge), "children", `${digest(agentId)}.json`);
+const ompBoundChildPath = (bridge: CoordinatorBridge, session: string, agentId: string) => join(coordinatorDirectory(bridge), "omp-children", `${digest({ session, agentId })}.json`);
 function removeFile(path: string): void {
     try {
         unlinkSync(path);
@@ -133,6 +148,57 @@ function assignmentReceipt(reference: string, bridge: CoordinatorBridge): Assign
     demand(receipt.id === reference && typeof receipt.token === "string" && typeof receipt.work === "string" && ["read", "write"].includes(receipt.mode), "INVALID_DELEGATION", "Invalid native child assignment receipt");
     demand(receipt.coordinator?.coordinator === bridge.context.coordinator && receipt.coordinator.runtimeAgent === bridge.context.runtimeAgent, "INVALID_DELEGATION", "Assignment was not issued by this Coordinator");
     return receipt;
+}
+function nativeHubConversation(input: unknown): boolean {
+    if (!input || typeof input !== "object" || Array.isArray(input))
+        return false;
+    const params = input as Record<string, unknown>;
+    if (params.op === "send")
+        return typeof params.to === "string" && params.to.length > 0 && !("name" in params);
+    if (params.op === "wait")
+        return !("name" in params);
+    return params.op === "inbox" || params.op === "list";
+}
+function promptAssignmentReference(input: unknown): string | null {
+    return typeof input === "string" ? input.match(/^WR_NEXT_ASSIGNMENT=(del_[0-9a-f-]{36})(?:\r?\n|$)/i)?.[1] ?? null : null;
+}
+function ompTaskAssignments(input: unknown, bridge: CoordinatorBridge): string[] {
+    demand(input && typeof input === "object" && !Array.isArray(input), "INVALID_EVENT", "OMP task input is required");
+    const root = input as Record<string, unknown>;
+    const tasks = Array.isArray(root.tasks) ? root.tasks : [root];
+    demand(tasks.length > 0 && tasks.length <= 32, "NATIVE_ASSIGNMENT_REQUIRED", "OMP task requires 1–32 explicitly delegated child prompts");
+    return tasks.map((task, index) => {
+        demand(task && typeof task === "object" && !Array.isArray(task), "INVALID_EVENT", `OMP task ${index + 1} must be an object`);
+        const reference = promptAssignmentReference((task as Record<string, unknown>).task);
+        demand(reference, "NATIVE_ASSIGNMENT_REQUIRED", `OMP task ${index + 1} must start with one WR_NEXT_ASSIGNMENT directive from wr-next delegate REF --read-only`);
+        demand(assignmentReceipt(reference, bridge).mode === "read", "NATIVE_READ_ONLY_REQUIRED", "OMP native task children require --read-only delegation; write-capable native tools have no per-tool execution context");
+        return reference;
+    });
+}
+function prepareOmpSpawn(bridge: CoordinatorBridge, payload: Record<string, unknown>): void {
+    demand(typeof payload.tool_use_id === "string", "INVALID_EVENT", "OMP task tool identity is required");
+    const assignments = ompTaskAssignments(payload.tool_input, bridge);
+    const path = ompPendingChildrenPath(bridge, payload.tool_use_id);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (existsSync(path)) {
+        const existing = readPrivateJson<OmpPendingChildren>(path);
+        demand(existing.version === 1 && existing.parentRuntimeAgent === bridge.context.runtimeAgent && existing.session === payload.session_id && existing.toolId === payload.tool_use_id && JSON.stringify(existing.assignments) === JSON.stringify(assignments), "NATIVE_SPAWN_BUSY", "OMP task identity is already bound to different assignments");
+        return;
+    }
+    atomic(path, { version: 1, parentRuntimeAgent: bridge.context.runtimeAgent, session: String(payload.session_id), toolId: payload.tool_use_id, assignments } satisfies OmpPendingChildren);
+}
+function clearOmpPendingChildren(bridge: CoordinatorBridge): void {
+    const directory = join(coordinatorDirectory(bridge), "omp-native-children");
+    if (!existsSync(directory))
+        return;
+    for (const name of readdirSync(directory)) {
+        if (!name.endsWith(".json"))
+            continue;
+        const path = join(directory, name);
+        const pending = readPrivateJson<OmpPendingChildren>(path);
+        if (pending.version === 1)
+            removeFile(path);
+    }
 }
 /** Single, non-expanding shell command; quoted JSON remains usable for atomic plan batches. */
 export function managementCommand(input: string): boolean {
@@ -283,6 +349,70 @@ async function handleClaudeChildEvent(bridge: CoordinatorBridge, payload: Record
         clearPendingTool(bridge, payload.tool_use_id);
     return true;
 }
+async function handleOmpChildEvent(bridge: CoordinatorBridge, payload: Record<string, unknown>, expected: string): Promise<boolean> {
+    const agentId = typeof payload.agent_id === "string" ? payload.agent_id : null;
+    const session = typeof payload.session_id === "string" ? payload.session_id : null;
+    const parentSession = typeof payload.parent_session_id === "string" ? payload.parent_session_id : null;
+    if (!agentId || !session || !parentSession)
+        return false;
+    const path = ompBoundChildPath(bridge, session, agentId);
+    const native = NativeRuntimeBridge.fromCoordinator(bridge.adapter, bridge.context.runtimeAgent);
+    if (expected === "SubagentStart") {
+        if (existsSync(path)) {
+            const child = readPrivateJson<OmpBoundChild>(path);
+            demand(child.version === 1 && child.bound && child.externalAgentId === agentId && child.session === session && child.parentSession === parentSession && child.runtimeRoot === bridge.context.runtimeAgent && payload.parent_tool_call_id === child.parentToolId && payload.child_index === child.index && payload.assignment_id === child.assignmentId, "RUNTIME_BINDING_CONFLICT", "OMP child event does not match its bound task identity");
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await native.resumeContext(child.runtimeAgent) } }));
+            return true;
+        }
+        const parentToolId = typeof payload.parent_tool_call_id === "string" ? payload.parent_tool_call_id : null;
+        const index = Number(payload.child_index);
+        const assignment = typeof payload.assignment_id === "string" ? payload.assignment_id : null;
+        demand(parentToolId && Number.isInteger(index) && index >= 0 && assignment, "NATIVE_CORRELATION_UNAVAILABLE", "OMP child binding requires its exact parent task tool identity, index, and assignment reference");
+        const pendingPath = ompPendingChildrenPath(bridge, parentToolId);
+        demand(existsSync(pendingPath), "NATIVE_CORRELATION_CONFLICT", "OMP child has no pending parent task binding");
+        const pending = readPrivateJson<OmpPendingChildren>(pendingPath);
+        demand(pending.version === 1 && pending.parentRuntimeAgent === bridge.context.runtimeAgent && pending.session === parentSession && pending.toolId === parentToolId && pending.assignments[index] === assignment, "NATIVE_CORRELATION_CONFLICT", "OMP child does not match the explicit parent task assignment");
+        const receipt = assignmentReceipt(assignment, bridge);
+        demand(receipt.mode === "read", "NATIVE_READ_ONLY_REQUIRED", "OMP native task children require read-only delegation");
+        const actor = await native.childStarted(pending.parentRuntimeAgent, { externalSessionId: session, agentId, invocationId: digest({ parentToolId, index, session, agentId }) }, digest({ type: "omp-child-start", parentToolId, index, session, agentId }), { delegationToken: receipt.token, environment: bridge.context.environment });
+        atomic(path, { version: 1, bound: true, externalAgentId: agentId, runtimeAgent: actor.runtimeAgent, runtimeRoot: actor.runtimeRoot, session, parentSession, parentToolId, index, assignmentId: assignment } satisfies OmpBoundChild);
+        removeFile(join(stateHome(), "assignments", `${assignment}.json`));
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await native.resumeContext(actor.runtimeAgent) } }));
+        return true;
+    }
+    if (!existsSync(path)) {
+        if (expected === "PreToolUse")
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "OMP native child has no verified wr-next task binding; parent Coordinator state was not inherited." } }));
+        return true;
+    }
+    const child = readPrivateJson<OmpBoundChild>(path);
+    demand(child.version === 1 && child.bound && child.externalAgentId === agentId && child.session === session && child.parentSession === parentSession && child.runtimeRoot === bridge.context.runtimeAgent && payload.parent_tool_call_id === child.parentToolId && payload.child_index === child.index && payload.assignment_id === child.assignmentId, "RUNTIME_BINDING_CONFLICT", "OMP child event does not match its bound task identity");
+    if (expected === "SubagentStop") {
+        await native.lifecycle(child.runtimeAgent, "quiescent", digest({ type: "omp-child-stop", session, agentId }));
+        return true;
+    }
+    if (expected !== "PreToolUse")
+        return true;
+    const toolName = String(payload.tool_name);
+    const input = payload.tool_input;
+    if (toolName === "bash") {
+        demand(input && typeof input === "object" && typeof (input as Record<string, unknown>).command === "string", "INVALID_EVENT", "Shell command is required");
+        const command = (input as Record<string, unknown>).command as string;
+        if (!managementCommand(command)) {
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Read-only OMP children may use bounded wr-next and Git inspection commands, not arbitrary shell commands" } }));
+            return true;
+        }
+        const env = await native.toolEnvironment(child.runtimeAgent);
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, updatedInput: { ...(input as Record<string, unknown>), command: `export WR_NEXT_CONTEXT=${quote(env.WR_NEXT_CONTEXT!)} WR_NEXT_BINDING_REQUIRED=1 WR_NEXT_RUNTIME_AGENT=${quote(env.WR_NEXT_RUNTIME_AGENT!)}; unset WR_NEXT_COORDINATOR WR_NEXT_COORDINATOR_TOOL WR_NEXT_TOKEN WR_NEXT_RUNTIME_CONNECTION; ${command}` } } }));
+        return true;
+    }
+    if (["read", "grep", "glob", "web_search", "web_fetch", "yield"].includes(toolName))
+        return true;
+    if (toolName === "hub" && nativeHubConversation(input))
+        return true;
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "OMP read-only child tool is not a bound inspection, bounded shell, or native hub conversation operation" } }));
+    return true;
+}
 /** Return true only when this permanent hook is handled by explicit repo coordination. */
 export async function coordinatorHook(input: string, source: string, expected: string): Promise<boolean> {
     demand(["claude", "codex", "omp"].includes(source), "UNSUPPORTED_ADAPTER", "Unsupported coordinator runtime", 400);
@@ -306,9 +436,11 @@ export async function coordinatorHook(input: string, source: string, expected: s
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "A descendant process cannot inherit a repository Coordinator grant. Use explicit child delegation." } }));
         return true;
     }
+    const parentSession = runtime === "omp" && typeof payload.parent_session_id === "string" ? payload.parent_session_id : payload.session_id;
+    demand(typeof parentSession === "string" && parentSession.length > 0 && parentSession.length <= 8192, "NATIVE_CORRELATION_UNAVAILABLE", "OMP child events require the exact parent session identity");
     const owner = providerOwner(runtime);
     demand(owner, "RUNTIME_IDENTITY_UNAVAILABLE", "Cannot identify this runtime invocation. Use wr-next run --next or a native dispatcher; no session-only guess was made");
-    const key = digest({ root, source: runtime, session: payload.session_id, owner }), ownerFile = join(stateHome(), "coordinator-owners", `${key}.json`);
+    const key = digest({ root, source: runtime, session: parentSession, owner }), ownerFile = join(stateHome(), "coordinator-owners", `${key}.json`);
     requireInstalled(root, runtime);
     registration = await refreshAgentAuthority(registration);
     if (!existsSync(ownerFile) && (expected !== "SessionStart" || payload.source === "compact")) {
@@ -323,41 +455,47 @@ export async function coordinatorHook(input: string, source: string, expected: s
     }
     else {
         const record = readPrivateJson<Owner>(ownerFile);
-        demand(!record.ended && record.identity === owner.identity && record.session === payload.session_id && record.root === root, "STALE_COORDINATOR", "Recorded runtime has ended or no longer matches");
+        demand(!record.ended && record.identity === owner.identity && record.session === parentSession && record.root === root, "STALE_COORDINATOR", "Recorded runtime has ended or no longer matches");
         bridge = CoordinatorBridge.restore(record.controller);
         refreshCoordinatorEndpoint(bridge, registration);
     }
     if (payload.agent_id || expected === "SubagentStart" || expected === "SubagentStop") {
         if (runtime === "claude")
             return await handleClaudeChildEvent(bridge, payload, expected);
+        if (runtime === "omp")
+            return await handleOmpChildEvent(bridge, payload, expected);
         if (expected === "PreToolUse")
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: `${runtime} child tool events do not expose a verified actor binding; parent state was not used.` } }));
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: `${runtime} native child event is blocked because its spawn-correlation profile is unsupported; parent state was not used.` } }));
         else if (expected === "SubagentStart")
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: `wr-next: ${runtime} native children remain unbound because their tool events lack a verified child identity.` } }));
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: `wr-next: ${runtime} native child remains unbound because its spawn-correlation profile is unsupported.` } }));
         return true;
     }
     if (expected === "SessionStart" || expected === "PostCompact") {
         if (payload.source === "compact" || expected === "PostCompact")
             await bridge.window(typeof payload.event_id === "string" ? payload.event_id : uid("window"));
-        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await bridge.guidance() } }));
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await bridge.guidance(), wrNextActive: true } }));
         return true;
     }
     if (expected === "PreToolUse") {
         const nativeTools: Record<typeof runtime, string[]> = {
             claude: ["Agent", "Task", "SendMessage"],
-            codex: ["spawn_agent", "Agent", "send_input", "resume_agent", "close_agent"],
+            codex: ["spawn_agent", "Agent", "send_input", "resume_agent", "close_agent", "multi_agent_v1send_input", "multi_agent_v1resume_agent", "multi_agent_v1close_agent", "multi_agent_v1wait_agent"],
             omp: ["task", "Task", "Agent", "spawn_agent"],
         };
         const nativeTool = nativeTools[runtime].includes(payload.tool_name);
         const supportedNativeSpawn = runtime === "claude" && ["Agent", "Task"].includes(payload.tool_name);
+        const supportedOmpSpawn = runtime === "omp" && payload.tool_name === "task";
         const input = payload.tool_input ?? {};
-        if (nativeTool && !supportedNativeSpawn || input.run_in_background === true) {
+        if (nativeTool && !supportedNativeSpawn && !supportedOmpSpawn || input.run_in_background === true) {
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: nativeTool ? `${runtime} native dispatch lacks the host identities required for safe binding.` : "Background writers are not supported by this coordinator profile." } }));
             return true;
         }
-        if (supportedNativeSpawn) {
+        if (supportedNativeSpawn || supportedOmpSpawn) {
             try {
-                prepareClaudeSpawn(bridge, payload);
+                if (supportedNativeSpawn)
+                    prepareClaudeSpawn(bridge, payload);
+                else
+                    prepareOmpSpawn(bridge, payload);
             }
             catch (error) {
                 console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: error instanceof Error ? error.message : String(error) } }));
@@ -367,7 +505,8 @@ export async function coordinatorHook(input: string, source: string, expected: s
         const state = await new Client(bridge.context).request<any>("/v1/coordination");
         const canRead = ["Read", "read", "Grep", "grep", "Glob", "glob", "WebSearch", "web_search", "WebFetch", "web_fetch"].includes(payload.tool_name);
         const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
-        const deniedUnclaimed = !state.currentExecution && !canRead && !supportedNativeSpawn && !(shell && typeof input.command === "string" && managementCommand(input.command));
+        const nativeHub = payload.tool_name === "hub" && nativeHubConversation(input);
+        const deniedUnclaimed = !state.currentExecution && !canRead && !nativeHub && !supportedNativeSpawn && !supportedOmpSpawn && !(shell && typeof input.command === "string" && managementCommand(input.command));
         if (deniedUnclaimed) {
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Claim work before implementation. Use a separate wr-next next --claim tool call." } }));
             return true;
@@ -441,6 +580,7 @@ export async function coordinatorHook(input: string, source: string, expected: s
     }
     if (expected === "SessionEnd") {
         removeFile(pendingChildPath(bridge));
+        clearOmpPendingChildren(bridge);
         await bridge.stop(false);
     }
     return true;

@@ -22,9 +22,9 @@ BunをNodeへ移行するpatchではない。Bun entrypoint、Bun SQLite、既�
 - 新しいローカルprofileではauthorityをCLIが安全に自動起動・再利用する。
 
 **現状:** Claudeのplain project hookでは、明示的に委譲したforeground・read-onlyのnative childを1つずつbindできる。生成hookを実行する実OSプロセスで、spawn相関、子専用Execution、tool context、完了、未割当childの観測と拒否まで確認した。
-`NativeRuntimeBridge` は引き続き汎用のharness-side APIである。Codexはchild tool hookに`agent_id`がなく、OMPはtop-level extensionからspawnとchild identityを安定して対応付けられないため、両者のnative childは拒否する。
-未完了なのは、実Claudeモデルによるchild起動の受入、Claudeのwritable・background・nested child、Codex/OMPのper-tool actor dispatchである。実Claude CLIのroot hook起動は確認したが、OAuth期限切れによりモデル呼出までは進まなかった。
-したがって、native subagent全体を受入済みとはしない。対応範囲はClaudeの明示的なread-only childに限定する。
+訂正: ローカルCodexソースには、childのtool hookにも`agent_id`があった。足りないのは、最初のtool実行前に使える親spawn callとの対応情報である。OMPにも`task:subagent:lifecycle`とchild session fileによる対応付けの経路がある。以前の「識別情報がない」という断定は誤りだった。現在の対応範囲とCodex fork案は[repository integrations](repository-integrations.md)に記載する。
+OMP 18.1.13では、extensionからread-onlyのnative taskを2つ同時にbindし、親子間・子同士のhub会話と別々のExecutionでの完了を実機で確認した。実Claudeモデルによるchild起動、writable・nested child、Codexのspawn対応付けは未完了である。実Claude CLIのroot hook起動は確認したが、OAuth期限切れによりモデル呼出までは進まなかった。
+したがって、native subagent全体を受入済みとはしない。対応範囲はClaudeの明示的なforeground・read-only childと、OMP 18.1.13の明示的なread-only taskに限定する。
 
 ## 検証の区別
 

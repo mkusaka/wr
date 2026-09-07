@@ -172,7 +172,9 @@ await bridge.stop(true);
 
 `delegate REF` saves a raw grant privately and returns an opaque `spawnDirective`, never the grant token. Claude can consume one such assignment for one foreground read-only Agent/Task call: the directive is the first prompt line, `PreToolUse` records a single owner-private pending association, and `SubagentStart` combines the shared `prompt_id` with Claude's actual `agent_id`. Child tool hooks carry that `agent_id`, so `NativeRuntimeBridge` can issue an immutable child Execution context without inheriting the Coordinator context.
 
-Unmarked, concurrent ambiguous, background, nested or writable Claude children remain denied. The read-only child allowlist is Claude inspection tools plus bounded wr-next and Git inspection shell commands. Codex exposes `agent_id` at child start/stop but not on child tool hooks; OMP's top-level project extension lacks a stable spawn-to-child identity. Those runtimes therefore remain fail-closed for native children and should use explicit delegated `run` processes.
+Unmarked, concurrent ambiguous, background, nested or writable Claude children remain denied. The read-only child allowlist is Claude inspection tools plus bounded wr-next and Git inspection shell commands. Correction: the inspected local Codex source supplies `agent_id` on child tool hooks too. Its unresolved boundary is parent-spawn correlation before the first child tool runs, not missing child identity. See [repository integrations](repository-integrations.md) for the source revision and minimal lineage fork proposal. Independent delegated `run` processes do not replace native inter-agent messaging.
+
+OMP 18.1.13 supports a batch of explicitly delegated read-only native `task` children. Each task starts with its own `spawnDirective`. The project extension matches actual lifecycle ID, parent tool-call ID, index and session file before binding a dedicated child Execution. Native `hub` conversation remains available between root and children and between siblings. Writes, arbitrary shell, nested spawning and process-control operations remain denied.
 
 ## Plain runtime profiles
 
@@ -186,7 +188,7 @@ Claude and Codex use permanent command hooks; OMP uses its permanent project ext
 6. Post-tool events close the matching slot. Claude additionally handles explicit permission-denied and resolved-batch events.
 7. Git hooks use the exact worker context of the shell invocation. Model CLI `report` and `done` use that same assignment.
 
-Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Claude may start one explicitly delegated foreground read-only child as described above. All other unbound native Agent/Task/SendMessage equivalents are denied rather than silently routed to the root.
+Before claim, known read tools and bounded non-expanding management shell commands are allowed; arbitrary write shell commands are refused. Claude may start one explicitly delegated foreground read-only child; OMP 18.1.13 may start an explicitly delegated read-only batch and use native hub conversation. Other unbound native Agent/Task equivalents are denied rather than silently routed to the root.
 
 The runtime-process lookup proves only the identity under the cooperating same-user OS model. It does not infer a work item from cwd, branch, latest session or prompt text. No stable owner identity means fail closed with an explanation/fallback. Desktop/embedded/unrecognized launch layouts must use a supported bridge or `run --next` until a host identity contract exists.
 
@@ -207,11 +209,11 @@ A changed local listening port may be refreshed only after authenticating the sa
 | Coordinator commands, claims, scope, lifecycle | Implemented and tested with real local HTTP/SQLite |
 | Plain Claude startup and per-tool hook binding | Implemented; generated hooks executed by a synthetic Claude-named OS process |
 | Plain Codex startup and per-tool hook binding | Implemented against the official rewrite contract; synthetic tool flow passed and installed Codex 0.153.4 executed start/end hooks |
-| Plain OMP startup and per-tool extension binding | Implemented; installed OMP 18.1.12 completed a model-driven add/claim/done flow with the wr-next extension loaded last |
+| Plain OMP startup and per-tool extension binding | Implemented; installed OMP 18.1.13 completed a two-child native task/hub flow with the wr-next extension isolated |
 | Remaining provider acceptance | Real Claude and Codex tool calls; Codex tool smoke was blocked by the active account usage limit |
-| Native children | Claude foreground read-only Agent/Task is bound and process-tested; nested/background/writable Claude children and Codex/OMP native children remain guarded |
+| Native children | Claude foreground read-only Agent/Task is process-tested; OMP 18.1.13 concurrent read-only task children and native hub messaging are model-tested; nested/writable profiles and Codex native children remain guarded |
 | Devin | Generic supervised execution only |
-| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 224 tests and the real workerd smoke test |
+| Bun/workerd after this patch | Accepted on Bun 1.4.2 with 226 tests and the real workerd smoke test |
 
 Codex requires `permissionDecision: allow` whenever a trusted hook returns `updatedInput`. In Codex core this marker enables the hook rewrite; the resulting input still passes through core sandbox and approval evaluation. Codex hooks and OMP extensions use last-rewrite-wins composition. A later input rewriter can remove wr-next's private dispatch prefix; the resulting CLI or Git operation fails closed as unbound rather than falling back to ambient work. OMP users with another input-rewriting extension must arrange for wr-next to load last or use an explicit trusted harness until the host offers composable input middleware.
 

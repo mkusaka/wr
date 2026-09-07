@@ -38,7 +38,7 @@ export type IntegrationStatus = {
     configured: boolean;
     installation: "absent" | "intact" | "drift" | "wrapper-only";
     activation: "not-proven";
-    nativeBinding: "requires-harness" | "unavailable";
+    nativeBinding: "project-read-only" | "requires-harness" | "unavailable";
     diagnostics: string[];
 };
 const disabled = (): Record<RuntimeName, boolean> => ({ claude: false, codex: false, omp: false, devin: false });
@@ -420,12 +420,12 @@ export function integrationStatus(cwd: string): IntegrationStatus[] {
         if (runtime === "codex" && configured)
             diagnostics.push("Review/trust the .codex project and exact hooks in Codex /hooks. Installation is not proof of trust or activation.");
         if (runtime === "omp" && configured)
-            diagnostics.push("OMP native extension discovery is cwd-local. Start from this worktree root. Native children require a harness dispatcher.");
+            diagnostics.push("OMP native extension discovery is cwd-local. Start from this worktree root. OMP 18.1.13 supports explicitly delegated read-only native task children and hub conversation; load wr-next after other input rewriters.");
         if (runtime === "devin")
             diagnostics.push("Wrapper/process and Git/PR capture only; no native lifecycle config is installed.");
         if (runtime === "claude" && configured)
             diagnostics.push("Restart sessions after changing settings. Global/managed hook precedence is not inferred from files here.");
-        return { runtime, configured, installation, activation: "not-proven", nativeBinding: runtime === "devin" ? "unavailable" : "requires-harness", diagnostics };
+        return { runtime, configured, installation, activation: "not-proven", nativeBinding: runtime === "devin" ? "unavailable" : runtime === "claude" || runtime === "omp" ? "project-read-only" : "requires-harness", diagnostics };
     });
 }
 export function requireInstalled(cwd: string, runtime: RuntimeName): void {
