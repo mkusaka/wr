@@ -21,15 +21,15 @@ type CommandResult = {
 type CliFixture = {
     cli(args: string[], env?: NodeJS.ProcessEnv): Promise<CommandResult>;
 };
-function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<CommandResult> {
-    return new Promise((res, rej) => {
-        const child = spawn(process.execPath, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-        let stdout = "", stderr = "";
-        child.stdout.on("data", b => stdout += b);
-        child.stderr.on("data", b => stderr += b);
-        child.on("error", rej);
-        child.on("close", code => res({ code: code ?? 1, stdout, stderr }));
-    });
+function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, argv0?: string): Promise<CommandResult> {
+    const { promise, resolve, reject } = Promise.withResolvers<CommandResult>();
+    const child = spawn(process.execPath, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"], ...(argv0 ? { argv0 } : {}) });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", b => stdout += b);
+    child.stderr.on("data", b => stderr += b);
+    child.on("error", reject);
+    child.on("close", code => resolve({ code: code ?? 1, stdout, stderr }));
+    return promise;
 }
 async function fixture() {
     const home = mkdtempSync(join(tmpdir(), "wr-coordinator-cli-")), repo = join(home, "repo");
@@ -126,6 +126,39 @@ await hook('SubagentStop',{prompt_id:'child-turn',agent_id:'child-1',agent_type:
 await hook('PostToolUse',{prompt_id:'root-turn',tool_name:'Agent',tool_use_id:'agent-tool',tool_input:agentInput,tool_response:{stdout:'Finished',is_error:false}});
 console.log(JSON.stringify({added,delegated,missing,started,childWrite,childPre,childResult,rogueStart,roguePre}));
 })().catch(error=>{console.error(error.stack);process.exitCode=1});`);
+    return file;
+}
+function fakeCodexReadOnlyChildren(f: {
+    repo: string;
+}) {
+    const file = join(f.repo, "codex-native-children");
+    writeFileSync(file, `
+const {readFileSync}=require('node:fs'); const {spawn}=require('node:child_process');
+const settings=JSON.parse(readFileSync('.codex/hooks.json','utf8'));
+const root='00000000-0000-4000-8000-000000000001', a='00000000-0000-4000-8000-00000000000a', b='00000000-0000-4000-8000-00000000000b', foreign='00000000-0000-4000-8000-00000000000f';
+function exec(command,input){const {promise,resolve,reject}=Promise.withResolvers();const p=spawn('/bin/sh',['-c',command],{env:process.env,stdio:['pipe','pipe','pipe']});let out='',err='';p.stdout.on('data',x=>out+=x);p.stderr.on('data',x=>err+=x);p.on('error',reject);p.on('close',code=>resolve({code:code??1,out,err}));p.stdin.end(input??'');return promise;}
+async function hook(name,fields={}){const command=settings.hooks[name][0].hooks[0].command;const result=await exec(command,JSON.stringify({cwd:process.cwd(),session_id:root,hook_event_name:name,...fields}));return {...result,json:result.out.trim()?JSON.parse(result.out):{}};}
+async function rootBash(id,command){const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command}});if(pre.json.hookSpecificOutput?.permissionDecision==='deny')throw new Error(pre.json.hookSpecificOutput.permissionDecisionReason);const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);await hook(result.code===0?'PostToolUse':'PostToolUseFailure',{tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}});if(result.code!==0)throw new Error(result.err);return result;}
+async function childBash(agent,id,command){const pre=await hook('PreToolUse',{agent_id:agent,tool_name:'Bash',tool_use_id:id,tool_input:{command}});if(pre.json.hookSpecificOutput?.permissionDecision==='deny')return {pre,result:null};const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);await hook(result.code===0?'PostToolUse':'PostToolUseFailure',{agent_id:agent,tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}});return {pre,result};}
+(async()=>{
+ await hook('SessionStart',{source:'startup'});
+ const workA=JSON.parse((await rootBash('add-a',"wr-next add 'Codex native review A'")).out),workB=JSON.parse((await rootBash('add-b',"wr-next add 'Codex native review B'")).out),workC=JSON.parse((await rootBash('add-c',"wr-next add 'Codex malformed response'")).out);
+ const delegationA=JSON.parse((await rootBash('delegate-a',\`wr-next delegate \${workA.result.id} --role reviewer --read-only\`)).out),delegationB=JSON.parse((await rootBash('delegate-b',\`wr-next delegate \${workB.result.id} --role reviewer --read-only\`)).out),delegationC=JSON.parse((await rootBash('delegate-c',\`wr-next delegate \${workC.result.id} --role reviewer --read-only\`)).out);
+ const unassigned=await hook('PreToolUse',{tool_name:'spawn_agent',tool_use_id:'unassigned',tool_input:{message:'Review without a delegated assignment'}});
+ const spawnA={message:delegationA.spawnDirective+'\\nReview work A.'},spawnB={message:delegationB.spawnDirective+'\\nReview work B.'},spawnC={message:delegationC.spawnDirective+'\\nReject this malformed response.'};
+ const preA=await hook('PreToolUse',{tool_name:'spawn_agent',tool_use_id:'spawn-a',tool_input:spawnA}),preB=await hook('PreToolUse',{tool_name:'multi_agent_v1spawn_agent',tool_use_id:'spawn-b',tool_input:spawnB}),preC=await hook('PreToolUse',{tool_name:'Agent',tool_use_id:'spawn-c',tool_input:spawnC});
+ if(preA.json.hookSpecificOutput?.permissionDecision==='deny'||preB.json.hookSpecificOutput?.permissionDecision==='deny'||preC.json.hookSpecificOutput?.permissionDecision==='deny')throw new Error('delegated Codex spawn denied');
+ const startA=hook('SubagentStart',{agent_id:a}),startB=hook('SubagentStart',{agent_id:b});
+ const postB=await hook('PostToolUse',{tool_name:'multi_agent_v1spawn_agent',tool_use_id:'spawn-b',tool_input:spawnB,tool_response:{agent_id:b}}),postA=await hook('PostToolUse',{tool_name:'spawn_agent',tool_use_id:'spawn-a',tool_input:spawnA,tool_response:JSON.stringify({agent_id:a})}),malformed=await hook('PostToolUse',{tool_name:'Agent',tool_use_id:'spawn-c',tool_input:spawnC,tool_response:{agent_id:'not-a-uuid'}});
+ const [startedA,startedB]=await Promise.all([startA,startB]),replay=await hook('PostToolUse',{tool_name:'spawn_agent',tool_use_id:'spawn-a',tool_input:spawnA,tool_response:JSON.stringify({agent_id:a})});
+ const statusA=await childBash(a,'status-a','wr-next status --json'),statusB=await childBash(b,'status-b','wr-next status --json');
+ const peerSend=await hook('PreToolUse',{agent_id:a,tool_name:'multi_agent_v1send_input',tool_use_id:'send-peer',tool_input:{target:b,message:'peer update'}}),rootSend=await hook('PreToolUse',{agent_id:a,tool_name:'send_input',tool_use_id:'send-root',tool_input:{target:root,message:'root update'}}),foreignSend=await hook('PreToolUse',{agent_id:a,tool_name:'send_input',tool_use_id:'send-foreign',tool_input:{target:foreign,message:'forbidden'}}),peerWait=await hook('PreToolUse',{agent_id:a,tool_name:'multi_agent_v1wait_agent',tool_use_id:'wait-peer',tool_input:{targets:[b]}}),foreignWait=await hook('PreToolUse',{agent_id:a,tool_name:'wait_agent',tool_use_id:'wait-foreign',tool_input:{targets:[foreign]}}),nested=await hook('PreToolUse',{agent_id:a,tool_name:'spawn_agent',tool_use_id:'nested',tool_input:{message:delegationA.spawnDirective+'\\nNested'}}),write=await hook('PreToolUse',{agent_id:a,tool_name:'apply_patch',tool_use_id:'write',tool_input:{patch:'forbidden'}}),arbitrary=await hook('PreToolUse',{agent_id:a,tool_name:'Bash',tool_use_id:'arbitrary',tool_input:{command:'printf forbidden'}}),read=await hook('PreToolUse',{agent_id:a,tool_name:'Read',tool_use_id:'read',tool_input:{path:'package.json'}});
+ const ambiguousSend=await hook('PreToolUse',{agent_id:a,tool_name:'send_input',tool_use_id:'send-ambiguous',tool_input:{target:b,id:b,message:'ambiguous'}});
+ const missingStarted=Date.now(),missing=await hook('PreToolUse',{agent_id:foreign,tool_name:'Bash',tool_use_id:'missing',tool_input:{command:'wr-next status --json'}}),missingElapsed=Date.now()-missingStarted;
+ const doneA=await childBash(a,'done-a',"wr-next done --summary 'Codex review A completed'"),doneB=await childBash(b,'done-b',"wr-next done --summary 'Codex review B completed'");
+ const stopA=await hook('SubagentStop',{agent_id:a}),stopB=await hook('SubagentStop',{agent_id:b});await hook('SessionEnd');
+ console.log(JSON.stringify({workA,workB,workC,unassigned,preA,preB,preC,postA,postB,malformed,replay,startedA,startedB,statusA,statusB,peerSend,rootSend,foreignSend,peerWait,foreignWait,ambiguousSend,nested,write,arbitrary,read,missing,missingElapsed,doneA,doneB,stopA,stopB,ids:{root,a,b}}));
+})().catch(error=>{console.error(error.stack);process.exitCode=1;});`);
     return file;
 }
 function fakeOmp(f: {
@@ -351,6 +384,124 @@ test("plain Codex process coordinates through installed hooks and preserves rewr
         assert.equal(Object.values(state.work).find(work => work.title === "Codex request")!.state, "done");
         assert.equal(Object.values(state.runs)[0]!.runtime, "codex");
         assert.ok(Object.values(state.dispatches).every(dispatch => dispatch.state === "closed"));
+    }
+    finally {
+        await f.close();
+    }
+});
+type HookOutput = {
+    code: number;
+    json: {
+        hookSpecificOutput?: {
+            permissionDecision?: string;
+            additionalContext?: string;
+            updatedInput?: {
+                command: string;
+            };
+        };
+    };
+};
+type CodexNativeChildrenOutput = {
+    workA: {
+        result: {
+            id: string;
+        };
+    };
+    workB: {
+        result: {
+            id: string;
+        };
+    };
+    workC: {
+        result: {
+            id: string;
+        };
+    };
+    unassigned: HookOutput;
+    preA: HookOutput;
+    preB: HookOutput;
+    preC: HookOutput;
+    postA: HookOutput;
+    postB: HookOutput;
+    malformed: HookOutput;
+    replay: HookOutput;
+    startedA: HookOutput;
+    startedB: HookOutput;
+    statusA: {
+        pre: HookOutput;
+        result: CommandResult;
+    };
+    statusB: {
+        pre: HookOutput;
+        result: CommandResult;
+    };
+    peerSend: HookOutput;
+    rootSend: HookOutput;
+    foreignSend: HookOutput;
+    peerWait: HookOutput;
+    foreignWait: HookOutput;
+    ambiguousSend: HookOutput;
+    nested: HookOutput;
+    write: HookOutput;
+    arbitrary: HookOutput;
+    read: HookOutput;
+    missing: HookOutput;
+    missingElapsed: number;
+    doneA: {
+        pre: HookOutput;
+        result: CommandResult;
+    };
+    doneB: {
+        pre: HookOutput;
+        result: CommandResult;
+    };
+    stopA: HookOutput;
+    stopB: HookOutput;
+    ids: {
+        root: string;
+        a: string;
+        b: string;
+    };
+};
+test("Codex read-only native children bind only matching delegated spawn receipts", async () => {
+    const f = await fixture();
+    try {
+        await init(f, true, "codex");
+        const result = await run([fakeCodexReadOnlyChildren(f)], f.repo, f.env, "codex");
+        assert.equal(result.code, 0, result.stderr);
+        const output = JSON.parse(result.stdout) as unknown as CodexNativeChildrenOutput, denied = (value: HookOutput) => value.json.hookSpecificOutput?.permissionDecision === "deny", rejected = (value: HookOutput) => denied(value) || value.code === 2;
+        assert.ok(denied(output.unassigned));
+        for (const value of [output.preA, output.preB, output.preC, output.peerSend, output.rootSend, output.peerWait, output.read])
+            assert.equal(rejected(value), false);
+        for (const value of [output.foreignSend, output.foreignWait, output.nested, output.write, output.arbitrary, output.missing])
+            assert.ok(rejected(value));
+        assert.equal(output.ambiguousSend.code, 2);
+        assert.equal(output.replay.code, 0);
+        // This is the real cross-process receipt wait; fake timers cannot drive hook subprocesses.
+        assert.ok(output.missingElapsed >= 2500 && output.missingElapsed <= 3500, `unbound child wait exceeded limit: ${output.missingElapsed}ms`);
+        for (const child of [output.startedA, output.startedB])
+            assert.match(child.json.hookSpecificOutput?.additionalContext ?? "", /working on/i);
+        for (const status of [output.statusA, output.statusB]) {
+            assert.equal(status.pre.json.hookSpecificOutput?.permissionDecision, "allow");
+            assert.match(status.pre.json.hookSpecificOutput?.updatedInput?.command ?? "", /WR_NEXT_CONTEXT=/);
+            assert.equal(status.result.code, 0, status.result.stderr);
+        }
+        for (const done of [output.doneA, output.doneB])
+            assert.equal(done.result.code, 0, done.result.stderr);
+        const state = f.server.workspace.store.snapshot(), works = Object.fromEntries(Object.values(state.work).map(work => [work.title, work]));
+        const workA = works["Codex native review A"]!, workB = works["Codex native review B"]!, workC = works["Codex malformed response"]!;
+        const childA = Object.values(state.runtimeAgents).find(agent => agent.externalAgentId === output.ids.a)!, childB = Object.values(state.runtimeAgents).find(agent => agent.externalAgentId === output.ids.b)!;
+        assert.equal(workA.state, "done");
+        assert.equal(workB.state, "done");
+        assert.equal(childA.parent, childB.parent);
+        assert.equal(state.runtimeAgents[childA.parent!]!.parent, null);
+        assert.equal(workC.state, "open");
+        assert.equal(childA.state, "quiescent");
+        assert.equal(childB.state, "quiescent");
+        assert.ok(childA.execution && childB.execution && childA.execution !== childB.execution);
+        assert.equal(state.executions[childA.execution!]!.work, workA.id);
+        assert.equal(state.executions[childB.execution!]!.work, workB.id);
+        assert.equal(Object.values(state.executions).some(execution => execution.work === workC.id), false);
     }
     finally {
         await f.close();

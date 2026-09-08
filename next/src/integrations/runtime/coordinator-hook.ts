@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { atomic, readPrivateJson, stateHome } from "../../cli/files.js";
 import { readRegistration, reapCoordinators, refreshAgentAuthority, refreshCoordinatorEndpoint } from "../../cli/coordination.js";
 import { CoordinatorBridge, type ToolContext } from "../../runtime/coordinator.js";
@@ -413,6 +414,150 @@ async function handleOmpChildEvent(bridge: CoordinatorBridge, payload: Record<st
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "OMP read-only child tool is not a bound inspection, bounded shell, or native hub conversation operation" } }));
     return true;
 }
+const codexSpawnTools = ["spawn_agent", "Agent", "multi_agent_v1spawn_agent"];
+const codexSendTools = ["send_input", "multi_agent_v1send_input"];
+const codexWaitTools = ["wait", "wait_agent", "multi_agent_v1wait_agent"];
+type CodexBoundChild = BoundChild & {
+    correlation: string;
+    toolId: string;
+    assignment: string;
+};
+const codexDirectory = (bridge: CoordinatorBridge) => join(coordinatorDirectory(bridge), "codex-native");
+const codexPendingPath = (bridge: CoordinatorBridge, payload: Record<string, unknown>) => join(codexDirectory(bridge), "pending", `${digest({ session: payload.session_id, turn: payload.turn_id ?? null, tool: payload.tool_use_id })}.json`);
+const codexChildPath = (bridge: CoordinatorBridge, session: string, agent: string) => join(codexDirectory(bridge), "children", `${digest({ session, agent })}.json`);
+const codexCorrelation = (payload: Record<string, unknown>) => digest({ session: payload.session_id, turn: payload.turn_id ?? null, tool: payload.tool_use_id, input: payload.tool_input });
+function codexChild(bridge: CoordinatorBridge, session: string, agent: string): CodexBoundChild | null {
+    const path = codexChildPath(bridge, session, agent);
+    if (!existsSync(path))
+        return null;
+    const child = readPrivateJson<CodexBoundChild>(path);
+    demand(child.version === 1 && child.bound && child.session === session && child.externalAgentId === agent && child.runtimeRoot === bridge.context.runtimeAgent, "RUNTIME_BINDING_CONFLICT", "Codex child receipt does not match this Coordinator and session");
+    return child;
+}
+function prepareCodexSpawn(bridge: CoordinatorBridge, payload: Record<string, unknown>): void {
+    demand(typeof payload.tool_use_id === "string" && payload.tool_use_id.length > 0, "INVALID_EVENT", "Codex spawn requires a tool-call identity");
+    const input = payload.tool_input as Record<string, unknown> | null;
+    demand(input && typeof input === "object" && !Array.isArray(input), "INVALID_EVENT", "Codex spawn input is required");
+    demand(!("task_name" in input) && !("fork_turns" in input), "UNSUPPORTED_NATIVE_PROFILE", "Codex MAv2 spawning is not supported by the MAv1 binding profile");
+    const texts = Array.isArray(input.items) ? input.items.filter(item => item && typeof item === "object" && item.type === "text").map(item => item.text) : [];
+    const prompts = [...(typeof input.message === "string" ? [input.message] : []), ...texts];
+    demand(prompts.length === 1 && !(input.message !== undefined && input.items !== undefined), "NATIVE_ASSIGNMENT_REQUIRED", "Codex spawn requires one explicit message or one text item, not ambiguous input");
+    const reference = promptAssignmentReference(prompts[0]);
+    demand(reference, "NATIVE_ASSIGNMENT_REQUIRED", "Run wr-next delegate REF --read-only and put its spawnDirective on the first line of the Codex child message");
+    demand(assignmentReceipt(reference, bridge).mode === "read", "NATIVE_READ_ONLY_REQUIRED", "Codex native children require read-only delegation");
+    createPendingChild(codexPendingPath(bridge, payload), { version: 1, assignment: reference, correlation: codexCorrelation(payload), parentRuntimeAgent: bridge.context.runtimeAgent, session: String(payload.session_id), toolId: payload.tool_use_id });
+}
+async function publishCodexChild(bridge: CoordinatorBridge, payload: Record<string, unknown>): Promise<void> {
+    const path = codexPendingPath(bridge, payload);
+    demand(existsSync(path), "NATIVE_ASSIGNMENT_REQUIRED", "Codex spawn result has no exact pending assignment");
+    const pending = readPrivateJson<PendingChild>(path);
+    demand(pending.version === 1 && pending.session === payload.session_id && pending.parentRuntimeAgent === bridge.context.runtimeAgent && pending.toolId === payload.tool_use_id && pending.correlation === codexCorrelation(payload), "NATIVE_CORRELATION_CONFLICT", "Codex spawn result does not match its pending tool invocation");
+    const result = typeof payload.tool_response === "string" ? JSON.parse(payload.tool_response) : payload.tool_response;
+    const agentId = result && typeof result === "object" ? result.agent_id : null;
+    demand(typeof agentId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agentId) && agentId !== payload.session_id, "NATIVE_CORRELATION_UNAVAILABLE", "Codex MAv1 spawn must return a distinct child UUID; no task-name or latest-child fallback");
+    // Seal the observed result before binding: a replay cannot assign this spawn to another UUID.
+    createPendingChild(path + ".result", { ...pending, correlation: digest({ correlation: pending.correlation, agentId }) });
+    const existing = codexChild(bridge, pending.session, agentId);
+    if (existing) {
+        demand(existing.correlation === pending.correlation && existing.toolId === pending.toolId && existing.assignment === pending.assignment, "NATIVE_CORRELATION_CONFLICT", "Codex child is already associated with another spawn");
+        return;
+    }
+    const receipt = assignmentReceipt(pending.assignment, bridge);
+    demand(receipt.mode === "read", "NATIVE_READ_ONLY_REQUIRED", "Codex child assignment must remain read-only");
+    const native = NativeRuntimeBridge.fromCoordinator(bridge.adapter, bridge.context.runtimeAgent);
+    const actor = await native.childStarted(pending.parentRuntimeAgent, { externalSessionId: pending.session, agentId, invocationId: digest({ correlation: pending.correlation, agentId }) }, digest({ type: "codex-child-start", correlation: pending.correlation, agentId }), { delegationToken: receipt.token, environment: bridge.context.environment });
+    atomic(codexChildPath(bridge, pending.session, agentId), { version: 1, bound: true, externalAgentId: agentId, runtimeAgent: actor.runtimeAgent, runtimeRoot: actor.runtimeRoot, session: pending.session, correlation: pending.correlation, toolId: pending.toolId, assignment: pending.assignment } satisfies CodexBoundChild);
+    // Publication follows authority binding; waiting children never see half-issued credentials.
+    removeFile(join(stateHome(), "assignments", `${pending.assignment}.json`));
+    const stop = codexChildPath(bridge, pending.session, agentId) + ".stop";
+    if (existsSync(stop))
+        await native.lifecycle(actor.runtimeAgent, "quiescent", readPrivateJson<{
+            eventId: string;
+        }>(stop).eventId);
+}
+function codexConversation(bridge: CoordinatorBridge, payload: Record<string, unknown>): boolean {
+    const tool = String(payload.tool_name);
+    if (!codexSendTools.includes(tool) && !codexWaitTools.includes(tool))
+        return false;
+    const input = payload.tool_input as Record<string, unknown> | null;
+    demand(input && typeof input === "object" && !Array.isArray(input), "INVALID_EVENT", "Codex native conversation input is required");
+    const send = codexSendTools.includes(tool);
+    demand(send ? !(input.target !== undefined && input.id !== undefined) : !(input.targets !== undefined && input.ids !== undefined), "INVALID_EVENT", "Codex peer fields must not mix canonical and legacy target forms");
+    const targets = send ? [input.target ?? input.id] : input.targets ?? input.ids;
+    demand(Array.isArray(targets) && targets.length > 0 && targets.length <= 32, "UNBOUND_RUNTIME_ACTOR", "Codex native conversation requires bounded explicit peer IDs");
+    for (const target of targets) {
+        demand(typeof target === "string" && target.length > 0, "UNBOUND_RUNTIME_ACTOR", "Codex peer identity is required");
+        demand(send && target === payload.session_id || codexChild(bridge, String(payload.session_id), target), "UNBOUND_RUNTIME_ACTOR", "Codex native conversation target is not a verified peer of this Coordinator");
+    }
+    return true;
+}
+async function handleCodexChildEvent(bridge: CoordinatorBridge, payload: Record<string, unknown>, expected: string): Promise<boolean> {
+    const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
+    demand(agentId.length > 0, "UNBOUND_RUNTIME_ACTOR", "Codex child events require the actual agent_id");
+    const session = String(payload.session_id);
+    let child = codexChild(bridge, session, agentId);
+    if (expected === "SubagentStop") {
+        const eventId = digest({ type: "codex-child-stop", agentId, turn: payload.turn_id, message: payload.last_assistant_message });
+        atomic(codexChildPath(bridge, session, agentId) + ".stop", { eventId });
+        // Stop can arrive after a startup timeout but before the parent finishes publication.
+        child = codexChild(bridge, session, agentId);
+        if (child)
+            await NativeRuntimeBridge.fromCoordinator(bridge.adapter, bridge.context.runtimeAgent).lifecycle(child.runtimeAgent, "quiescent", eventId);
+        return true;
+    }
+    if (!child && (expected === "SubagentStart" || expected === "PreToolUse")) {
+        // The parent spawn hook runs independently. Stay below the installed 20-second runner timeout.
+        const deadline = performance.now() + 3000;
+        while (!child && performance.now() < deadline) {
+            await delay(50);
+            child = codexChild(bridge, session, agentId);
+        }
+    }
+    if (!child) {
+        const reason = "Codex native child has no exact published wr-next spawn binding; parent Coordinator state was not inherited";
+        if (expected === "PreToolUse")
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: reason } }));
+        else if (expected === "SubagentStart")
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: reason } }));
+        return true;
+    }
+    const native = NativeRuntimeBridge.fromCoordinator(bridge.adapter, bridge.context.runtimeAgent);
+    if (expected === "SubagentStart") {
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await native.resumeContext(child.runtimeAgent) } }));
+        return true;
+    }
+    if (expected !== "PreToolUse")
+        return true;
+    const tool = String(payload.tool_name), input = payload.tool_input as Record<string, unknown> | null;
+    const conversation = codexConversation(bridge, payload);
+    const shell = tool === "Bash" || tool === "bash";
+    const inspection = ["Read", "read", "Grep", "grep", "Glob", "glob", "WebSearch", "web_search", "WebFetch", "web_fetch", "view_image"].includes(tool);
+    if (!conversation && !shell && !inspection) {
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Codex read-only child tool is not a supported inspection or native conversation; nested spawning and writes are denied" } }));
+        return true;
+    }
+    if (shell) {
+        demand(input && typeof input.command === "string", "INVALID_EVENT", "Codex normalized shell command is required");
+        if (!managementCommand(input.command)) {
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Read-only Codex children may use bounded wr-next and Git inspection commands, not arbitrary shell commands" } }));
+            return true;
+        }
+    }
+    await native.lifecycle(child.runtimeAgent, "started", digest({ type: "codex-child-tool", agentId, turn: payload.turn_id, tool: payload.tool_use_id }));
+    if (shell) {
+        const env = await native.toolEnvironment(child.runtimeAgent);
+        const command = `export WR_NEXT_CONTEXT=${quote(env.WR_NEXT_CONTEXT!)} WR_NEXT_BINDING_REQUIRED=1 WR_NEXT_RUNTIME_AGENT=${quote(env.WR_NEXT_RUNTIME_AGENT!)}; unset WR_NEXT_COORDINATOR WR_NEXT_COORDINATOR_TOOL WR_NEXT_TOKEN WR_NEXT_RUNTIME_CONNECTION; ${input!.command}`;
+        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "allow", updatedInput: { ...input, command } } }));
+    }
+    return true;
+}
+function clearCodexPending(bridge: CoordinatorBridge): void {
+    const directory = join(codexDirectory(bridge), "pending");
+    if (existsSync(directory))
+        for (const name of readdirSync(directory))
+            if (name.endsWith(".json") || name.endsWith(".json.result"))
+                removeFile(join(directory, name));
+}
 /** Return true only when this permanent hook is handled by explicit repo coordination. */
 export async function coordinatorHook(input: string, source: string, expected: string): Promise<boolean> {
     demand(["claude", "codex", "omp"].includes(source), "UNSUPPORTED_ADAPTER", "Unsupported coordinator runtime", 400);
@@ -464,11 +609,7 @@ export async function coordinatorHook(input: string, source: string, expected: s
             return await handleClaudeChildEvent(bridge, payload, expected);
         if (runtime === "omp")
             return await handleOmpChildEvent(bridge, payload, expected);
-        if (expected === "PreToolUse")
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: `${runtime} native child event is blocked because its spawn-correlation profile is unsupported; parent state was not used.` } }));
-        else if (expected === "SubagentStart")
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: `wr-next: ${runtime} native child remains unbound because its spawn-correlation profile is unsupported.` } }));
-        return true;
+        return await handleCodexChildEvent(bridge, payload, expected);
     }
     if (expected === "SessionStart" || expected === "PostCompact") {
         if (payload.source === "compact" || expected === "PostCompact")
@@ -479,21 +620,25 @@ export async function coordinatorHook(input: string, source: string, expected: s
     if (expected === "PreToolUse") {
         const nativeTools: Record<typeof runtime, string[]> = {
             claude: ["Agent", "Task", "SendMessage"],
-            codex: ["spawn_agent", "Agent", "send_input", "resume_agent", "close_agent", "multi_agent_v1send_input", "multi_agent_v1resume_agent", "multi_agent_v1close_agent", "multi_agent_v1wait_agent"],
+            codex: [...codexSpawnTools, ...codexSendTools, ...codexWaitTools, "resume_agent", "close_agent", "multi_agent_v1resume_agent", "multi_agent_v1close_agent"],
             omp: ["task", "Task", "Agent", "spawn_agent"],
         };
-        const nativeTool = nativeTools[runtime].includes(payload.tool_name);
+        const nativeTool = nativeTools[runtime].includes(payload.tool_name) || runtime === "codex" && String(payload.tool_name).startsWith("collaboration");
         const supportedNativeSpawn = runtime === "claude" && ["Agent", "Task"].includes(payload.tool_name);
         const supportedOmpSpawn = runtime === "omp" && payload.tool_name === "task";
+        const supportedCodexSpawn = runtime === "codex" && codexSpawnTools.includes(payload.tool_name);
+        const supportedCodexConversation = runtime === "codex" && codexConversation(bridge, payload);
         const input = payload.tool_input ?? {};
-        if (nativeTool && !supportedNativeSpawn && !supportedOmpSpawn || input.run_in_background === true) {
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: nativeTool ? `${runtime} native dispatch lacks the host identities required for safe binding.` : "Background writers are not supported by this coordinator profile." } }));
+        if (nativeTool && !supportedNativeSpawn && !supportedOmpSpawn && !supportedCodexSpawn && !supportedCodexConversation || input.run_in_background === true) {
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: nativeTool ? `${runtime} native operation is outside the supported read-only child profile.` : "Background writers are not supported by this coordinator profile." } }));
             return true;
         }
-        if (supportedNativeSpawn || supportedOmpSpawn) {
+        if (supportedNativeSpawn || supportedOmpSpawn || supportedCodexSpawn) {
             try {
                 if (supportedNativeSpawn)
                     prepareClaudeSpawn(bridge, payload);
+                else if (supportedCodexSpawn)
+                    prepareCodexSpawn(bridge, payload);
                 else
                     prepareOmpSpawn(bridge, payload);
             }
@@ -506,7 +651,7 @@ export async function coordinatorHook(input: string, source: string, expected: s
         const canRead = ["Read", "read", "Grep", "grep", "Glob", "glob", "WebSearch", "web_search", "WebFetch", "web_fetch"].includes(payload.tool_name);
         const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
         const nativeHub = payload.tool_name === "hub" && nativeHubConversation(input);
-        const deniedUnclaimed = !state.currentExecution && !canRead && !nativeHub && !supportedNativeSpawn && !supportedOmpSpawn && !(shell && typeof input.command === "string" && managementCommand(input.command));
+        const deniedUnclaimed = !state.currentExecution && !canRead && !nativeHub && !supportedNativeSpawn && !supportedOmpSpawn && !supportedCodexSpawn && !supportedCodexConversation && !(shell && typeof input.command === "string" && managementCommand(input.command));
         if (deniedUnclaimed) {
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Claim work before implementation. Use a separate wr-next next --claim tool call." } }));
             return true;
@@ -519,6 +664,8 @@ export async function coordinatorHook(input: string, source: string, expected: s
         catch (error) {
             if (supportedNativeSpawn)
                 clearPendingTool(bridge, payload.tool_use_id);
+            if (supportedCodexSpawn)
+                removeFile(codexPendingPath(bridge, payload));
             throw error;
         }
         if (shell) {
@@ -561,6 +708,18 @@ export async function coordinatorHook(input: string, source: string, expected: s
         if (typeof payload.tool_use_id !== "string" || !existsSync(bridge.toolPath(payload.tool_use_id)))
             return true;
         const slot = readPrivateJson<ToolContext>(bridge.toolPath(payload.tool_use_id));
+        if (runtime === "codex" && codexSpawnTools.includes(payload.tool_name)) {
+            try {
+                if (expected === "PostToolUse")
+                    await publishCodexChild(bridge, payload);
+                else
+                    removeFile(codexPendingPath(bridge, payload));
+            }
+            finally {
+                await bridge.toolFinished(payload.tool_use_id);
+            }
+            return true;
+        }
         // Flush Git observations while this exact work epoch is still active.
         await syncOutbox();
         if (expected === "PostToolUse" && slot.worker && /\bgh\s+pr\s+(create|merge)\b/.test(String(payload.tool_input?.command ?? ""))) {
@@ -581,6 +740,8 @@ export async function coordinatorHook(input: string, source: string, expected: s
     if (expected === "SessionEnd") {
         removeFile(pendingChildPath(bridge));
         clearOmpPendingChildren(bridge);
+        if (runtime === "codex")
+            clearCodexPending(bridge);
         await bridge.stop(false);
     }
     return true;
