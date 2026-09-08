@@ -10,6 +10,8 @@
 
 The local integration proof uses real child processes, Git hooks/commits, SQLite and HTTP. Synthetic provider processes cover all three tool-binding contracts. Installed OMP 18.1.13 additionally completed an actual two-child native task flow with the wr-next extension isolated: Alpha/W2 and Beta/W3 had distinct Execution IDs, the root had no Execution, both Works reached done, and native hub root/child and sibling messages were delivered. Both children successfully returned structured results through native `yield` and became quiescent. The CLI exited 0. No `wr-next run` substitution was used.
 
+Stock Codex 0.153.4 was subsequently exercised against a deterministic local Responses endpoint with real native spawn/wait, hook subprocesses and shell tools. Eight acceptance scenarios covered MAv1 startup/pre-tool correlation, reversed child tool order, missing assignment publication, explicit exit-2 denial, exit-1/malformed-output/runner-timeout fail-open behavior, and MAv2 correlation through exact persisted session metadata. This proves forkless runtime feasibility, not hosted-model behavior or production wr-next native integration. Details and isolation conditions are in [repository integrations](repository-integrations.md#codex).
+
 ## Covered behavior
 
 - Work hierarchy, dependency and aggregate-cycle detection, atomic plan rollback, claims, reservations and lane capacity.
