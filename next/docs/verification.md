@@ -14,6 +14,10 @@ Historical stock Codex 0.153.4 evidence used a deterministic local Responses end
 
 The production-integrated stock Codex 0.153.4 MAv1 smoke also passed: generated project hooks, real native tools, real shell processes, and the local authority bound two children to separate W2/W3 Executions. Child status was assignment-scoped; both Works reached done and children became quiescent, while the root had no Execution. Native root/child and sibling sends returned submission receipts, and native waits completed. Only Responses API model output was deterministic; hosted-model behavior remains untested. The temporary sandbox explicitly permitted wr state writes and authority networking, and `agents.max_depth = 2` exposed child messaging. See the integration guide for prerequisites and trust isolation.
 
+On 2026-09-09, the normal user OMP 18.1.15 extension stack reproduced `UNBOUND_COORDINATOR` at `claim`: the host gave a later environment rewriter the original input, losing wr-next's prefix. A local host input-composition patch passed 84 extension-runner tests and package type checking, then a real-model trial completed plan/claim/report/done with the existing extensions enabled. The authority confirmed the Work was done. This acceptance covers the root lifecycle on that patched binary, not 18.1.15 native children or arbitrary future plugin stacks.
+
+Codex startup output also violated its strict schema by including the OMP-only `wrNextActive` field. Provider-specific emission fixes that error; the generated hook regression and actual stock Codex parser completed with a deterministic local Responses fixture. Hosted-model Codex and Claude Code trials were attempted but stopped at account usage limits; no credits or resets were used.
+
 ## Covered behavior
 
 - Work hierarchy, dependency and aggregate-cycle detection, atomic plan rollback, claims, reservations and lane capacity.
@@ -40,7 +44,7 @@ The production-integrated stock Codex 0.153.4 MAv1 smoke also passed: generated 
 
 ## Remaining external acceptance gates
 
-- Installed Claude Code 2.1.263 executed the generated root SessionStart hook, but its model-driven child path could not run because the local OAuth session had expired. Codex's hosted-model path remains untested after an earlier account usage-limit failure; its integrated native MAv1 path passed with deterministic local model responses. OMP's isolated 18.1.13 native task/hub smoke passed; the earlier ordinary-user-plugin-stack smoke demonstrated a last-input-rewriter conflict and failed closed before claim. Arbitrary plugin compositions and writable/nested native child profiles are not accepted.
+- Codex 0.153.4 and Claude Code 2.1.267 started in the normal trial repository and registered Coordinators, but their hosted-model tool paths were blocked by account usage limits. Codex's native MAv1 path passed separately with deterministic local model responses. OMP's isolated 18.1.13 native task/hub smoke and the patched 18.1.15 normal-stack root smoke passed. Arbitrary plugin compositions and writable/nested native child profiles are not accepted.
 - GitHub synchronization and publication have not been exercised against the live GitHub API.
 - No real legacy scope has been used for dogfood, cutover or rollback.
 - Mermaid escaping and deterministic grammar are tested, but browser rendering has not been exercised.

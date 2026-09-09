@@ -378,6 +378,17 @@ test("plain Codex process coordinates through installed hooks and preserves rewr
         const fake = fakeClaude(f, ["wr-next add 'Codex request'", "wr-next next --claim", "wr-next report --progress 'Codex working'", "wr-next done --summary 'Codex submitted'"], { runtime: "codex" });
         const result = await run([fake], f.repo, f.env);
         assert.equal(result.code, 0, result.stderr);
+        const calls = JSON.parse(result.stdout) as {
+            name: string;
+            json: {
+                hookSpecificOutput?: Record<string, unknown>;
+            };
+        }[];
+        const startup = calls.find(call => call.name === "start")?.json.hookSpecificOutput;
+        assert.ok(startup);
+        assert.deepEqual(Object.keys(startup).sort(), ["additionalContext", "hookEventName"]);
+        assert.equal(startup.hookEventName, "SessionStart");
+        assert.equal(typeof startup.additionalContext, "string");
         assert.match(result.stdout, /"permissionDecision":"allow"/);
         assert.match(result.stdout, /WR_NEXT_COORDINATOR_TOOL/);
         const state = f.server.workspace.store.snapshot();

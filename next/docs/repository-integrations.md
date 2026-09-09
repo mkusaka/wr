@@ -108,6 +108,7 @@ Use **one** project representation: `.codex/hooks.json`. Do not also add inline 
 
 Do not set hooks-enabled features, project trust, managed-only policy, permission grants, or bypass flags. Trust remains the runtime's decision. The installer asks the operator to review `/hooks`; installing a file is not proof that it is loaded or trusted.
 Plain agent-managed startup uses Codex's required `permissionDecision: allow` marker only to return `updatedInput`. Codex core applies the rewritten command before its ordinary sandbox and approval evaluation; wr-next does not set hook-trust or permission-bypass options.
+Startup context output follows each provider's schema: Codex receives only `hookEventName` and `additionalContext` in `hookSpecificOutput`. The private `wrNextActive` activation marker is emitted only to the OMP extension; Codex rejects that extra field.
 
 The TOML conflict detector is intentionally conservative, not a general TOML parser. Quoted/exotic structures that bypass a simple detector remain a live-settings concern; the installer does not claim full effective configuration analysis.
 
@@ -163,6 +164,10 @@ OMP 18.1.13's public `task:subagent:lifecycle` event supplies the actual child I
 Delegate each Work with `wr-next delegate REF --read-only`, then put its returned `spawnDirective` on the first line of the corresponding native `task.tasks[].task`. The built-in tool still creates the children. Native `hub` peer send/list/inbox/wait remains available to both root and children, including sibling conversation. Children retain native `yield` for incremental and terminal result submission. Bounded inspection and wr-next/Git inspection shell commands are allowed; writes, arbitrary shell, eval, nested spawning and process-control hub operations are denied. The native binding is version-gated to 18.1.13; other versions retain root integration but cannot use this native task profile. Unenrolled installations remain inert.
 
 Installed OMP 18.1.13 was exercised with two concurrent native children and native root/child and sibling messaging, using `--no-extensions -e .omp/extensions/wr-next.ts` to isolate the extension. Other input rewriters still require wr-next to load last. This is not acceptance of arbitrary plugin stacks or writable/nested child profiles.
+
+**Normal-stack repair (2026-09-09).** Stock OMP 18.1.15 passes the original input to every `tool_call` handler and keeps only the last result. An existing environment-injection extension therefore removed wr-next's command prefix, producing `UNBOUND_COORDINATOR` on `claim`. A local host patch now passes the effective input to each subsequent handler and retains it through non-input results, without changing blocking/cancellation precedence. With that patch installed, the ordinary extension stack and a real model completed `plan`, `claim`, `report`, and `done`; the authority confirmed the Work was done. No extension was disabled and no `run` wrapper replaced the native root.
+
+This is a locally patched 18.1.15 host, not an upstream release guarantee. A stock binary update can remove the fix. Keep the patch until upstream provides equivalent composition and re-run the normal-stack smoke after upgrades. The repaired root flow does not extend the version-gated 18.1.13 native-child profile to 18.1.15.
 
 ## Installation safety
 

@@ -614,7 +614,10 @@ export async function coordinatorHook(input: string, source: string, expected: s
     if (expected === "SessionStart" || expected === "PostCompact") {
         if (payload.source === "compact" || expected === "PostCompact")
             await bridge.window(typeof payload.event_id === "string" ? payload.event_id : uid("window"));
-        console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, additionalContext: await bridge.guidance(), wrNextActive: true } }));
+        const output: Record<string, unknown> = { hookEventName: expected, additionalContext: await bridge.guidance() };
+        if (runtime === "omp")
+            output.wrNextActive = true;
+        console.log(JSON.stringify({ hookSpecificOutput: output }));
         return true;
     }
     if (expected === "PreToolUse") {
