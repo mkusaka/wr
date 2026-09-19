@@ -9,6 +9,11 @@ export const configPaths = {
     codex: ".codex/hooks.json",
     omp: ".omp/extensions/wr-next.ts",
 } as const;
+/** Agent-discovered skill projections. `.agents` covers codex/omp/devin; `.claude` covers claude. */
+export const skillPaths = {
+    agents: [".agents/skills/wr-next/SKILL.md", ".agents/skills/wr-next/agents/openai.yaml"],
+    claude: [".claude/skills/wr-next/SKILL.md"],
+} as const;
 export const commands = Object.fromEntries(["claude", "codex", "omp"].map(name => [name,
     `wr-next internal integration-event --source ${name} --adapter-version ${adapterVersion} --installation project`,
 ])) as Record<HookRuntime, string>;

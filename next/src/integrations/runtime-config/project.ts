@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { demand, digest, Fault } from "../../domain/util.js";
 import { git, gitPath, tryGit } from "../../git/repository.js";
 import { managedContext } from "../../cli/files.js";
-import { configPath, configPaths, groups, ompExtension, runtimeNames, commands, adapterVersion, type RuntimeName, type HookGroup } from "./catalog.js";
+import { configPath, configPaths, groups, ompExtension, runtimeNames, commands, adapterVersion, skillPaths, type RuntimeName, type HookGroup } from "./catalog.js";
 type JsonObject = Record<string, unknown>;
 export type ProjectConfig = {
     schemaVersion: 1;
@@ -18,9 +18,15 @@ type OwnedFile = {
     content?: string;
     created: boolean;
 };
+type OwnedSkill = {
+    path: string;
+    content: string;
+    created: boolean;
+};
 type Manifest = {
     version: 1;
     files: OwnedFile[];
+    skills?: OwnedSkill[];
 };
 type Change = {
     path: string;
@@ -133,6 +139,12 @@ function readManifest(root: string): Manifest {
                 demand(event in groups(x.runtime as "claude" | "codex") && same(g, groups(x.runtime as "claude" | "codex")[event]), "INTEGRATION_STATE_INVALID", "Unknown owned hook definition; use the previous adapter to uninstall before upgrading");
         }
     }
+    const allowedSkills = new Set<string>(Object.values(skillPaths).flat());
+    demand(raw.skills === undefined || Array.isArray(raw.skills), "INTEGRATION_STATE_INVALID", "Invalid owned skills list");
+    for (const s of raw.skills ?? []) {
+        const x = object(s, "managed skill");
+        demand(allowedSkills.has(String(x.path)) && typeof x.content === "string" && typeof x.created === "boolean", "INTEGRATION_STATE_INVALID", "Invalid owned skill path");
+    }
     return raw as unknown as Manifest;
 }
 function hookMap(doc: JsonObject): Record<string, unknown[]> {
@@ -221,6 +233,26 @@ function renderFile(root: string, runtime: Exclude<RuntimeName, "devin">, enable
         after = before;
     return { change: { path, before, after, mode }, ...(enable ? { owned: { runtime, path: relative, groups: expected, created } } : {}) };
 }
+/** Bundled skill sources live next to the package root, four levels above this module. */
+const skillSources: Record<string, string> = {
+    ".agents/skills/wr-next/SKILL.md": "SKILL.md",
+    ".agents/skills/wr-next/agents/openai.yaml": "agents/openai.yaml",
+    ".claude/skills/wr-next/SKILL.md": "SKILL.md",
+};
+function skillContent(relative: string): string {
+    return readFileSync(new URL(`../../../../skills/wr-next/${skillSources[relative]}`, import.meta.url), "utf8");
+}
+function renderSkill(root: string, relative: string, enable: boolean, old?: OwnedSkill): {
+    change: Change;
+    owned?: OwnedSkill;
+} {
+    const path = safePath(root, relative), before = read(path), mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o644, generated = skillContent(relative);
+    if (old)
+        demand(before === old.content, "INTEGRATION_DRIFT", `Managed skill ${relative} was modified or removed; reconcile manually`);
+    else
+        demand(before === null || before === generated, "INTEGRATION_CONFLICT", `Refusing to replace an existing ${relative}`);
+    return { change: { path, before, after: enable ? generated : null, mode }, ...(enable ? { owned: { path: relative, content: generated, created: old?.created ?? before === null } } : {}) };
+}
 function atomicText(path: string, content: string | null, mode: number): void {
     if (content === null) {
         if (existsSync(path))
@@ -278,7 +310,7 @@ function recoverLocked(root: string): void {
         return;
     const journal = parse(body, "integration journal") as unknown as Journal;
     demand(journal.version === 1 && journal.root === root && Array.isArray(journal.changes), "INTEGRATION_STATE_INVALID", "Journal belongs to another repository");
-    const allowed = new Set([configPath, ...Object.values(configPaths)].map(p => safePath(root, p)).concat(s.manifest));
+    const allowed = new Set([configPath, ...Object.values(configPaths), ...Object.values(skillPaths).flat()].map(p => safePath(root, p)).concat(s.manifest));
     for (const c of journal.changes) {
         demand(Number.isInteger(c.mode) && c.mode >= 0 && c.mode <= 0o777 && (c.mode & 0o022) === 0 && allowed.has(c.path) && (c.before === null || typeof c.before === "string") && (c.after === null || typeof c.after === "string"), "INTEGRATION_STATE_INVALID", "Invalid journal entry");
         const current = read(c.path);
@@ -375,9 +407,24 @@ export function syncIntegrations(cwd: string, options: InstallOptions = {}): {
             if (planned.owned)
                 files.push(planned.owned);
         }
+        const agentSkill = config.integrations.codex || config.integrations.omp || config.integrations.devin;
+        const skills: OwnedSkill[] = [];
+        for (const [relative, enable] of [
+            [skillPaths.claude[0], config.integrations.claude],
+            [skillPaths.agents[0], agentSkill],
+            [skillPaths.agents[1], agentSkill],
+        ] as const) {
+            const old = manifest.skills?.find(s => s.path === relative);
+            if (!enable && !old)
+                continue;
+            const planned = renderSkill(root, relative, enable, old);
+            changes.push(planned.change);
+            if (planned.owned)
+                skills.push(planned.owned);
+        }
         const path = safePath(root, configPath), before = read(path);
         changes.push({ path, before, after: before !== null && same(parse(before, configPath), config) ? before : pretty(config), mode: existsSync(path) ? lstatSync(path).mode & 0o777 : 0o644 });
-        changes.push({ path: s.manifest, before: read(s.manifest), after: pretty({ version: 1, files }), mode: 0o600 });
+        changes.push({ path: s.manifest, before: read(s.manifest), after: pretty({ version: 1, files, skills }), mode: 0o600 });
         if (!options.dryRun)
             commitChanges(root, changes);
         return { root, config, changed: changes.filter(c => c.before !== c.after).map(c => c.path), statuses: options.dryRun ? [] : integrationStatus(root), dryRun: options.dryRun ?? false };

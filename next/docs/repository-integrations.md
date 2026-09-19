@@ -46,6 +46,8 @@ Unmanaged sessions that happen to load these files are inert: no auto-claim, ope
   .claude/settings.json           Only exact wr-next hook handlers are managed
   .codex/hooks.json               Only exact wr-next hook handlers are managed
   .omp/extensions/wr-next.ts       Owned standalone native extension
+  .claude/skills/wr-next/          Owned skill copy, installed while claude is enabled
+  .agents/skills/wr-next/          Owned skill copy (SKILL.md + agents/openai.yaml), installed while codex/omp/devin is enabled
 
 <worktree Git-private directory>/wr-next/integrations/
   manifest.json                   Installed handler/content ownership

@@ -94,6 +94,39 @@ test("uninstall removes only unchanged files originally created by this installe
         f.close();
     }
 });
+test("init installs the wr-next skill; disabling its consumers removes it", () => {
+    const f = fixture();
+    try {
+        syncIntegrations(f.dir, { runtimes: ["claude", "codex"] });
+        const agentsSkill = join(f.dir, ".agents/skills/wr-next/SKILL.md"), claudeSkill = join(f.dir, ".claude/skills/wr-next/SKILL.md");
+        assert.match(readFileSync(agentsSkill, "utf8"), /name: wr-next/);
+        assert.ok(existsSync(join(f.dir, ".agents/skills/wr-next/agents/openai.yaml")));
+        assert.match(readFileSync(claudeSkill, "utf8"), /name: wr-next/);
+        assert.equal(syncIntegrations(f.dir, { runtimes: ["claude", "codex"] }).changed.length, 0);
+        syncIntegrations(f.dir, { disable: ["codex"] });
+        assert.equal(existsSync(agentsSkill), false);
+        assert.ok(existsSync(claudeSkill));
+        syncIntegrations(f.dir, { disable: ["claude"] });
+        assert.equal(existsSync(claudeSkill), false);
+    }
+    finally {
+        f.close();
+    }
+});
+test("a modified managed skill blocks sync as drift", () => {
+    const f = fixture();
+    try {
+        syncIntegrations(f.dir, { runtimes: ["devin"] });
+        const agentsSkill = join(f.dir, ".agents/skills/wr-next/SKILL.md");
+        assert.ok(existsSync(agentsSkill));
+        assert.equal(existsSync(join(f.dir, ".claude/skills/wr-next/SKILL.md")), false);
+        f.write(".agents/skills/wr-next/SKILL.md", "edited");
+        error("INTEGRATION_DRIFT", () => syncIntegrations(f.dir, { runtimes: ["claude"] }));
+    }
+    finally {
+        f.close();
+    }
+});
 test("an exact shared projection can be adopted in a fresh clone and explicitly uninstalled", () => {
     const f = fixture();
     try {

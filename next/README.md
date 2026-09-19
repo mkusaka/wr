@@ -37,7 +37,7 @@ wr-next integrations
 
 `init` detects installed executables/existing runtime directories without executing them. Select runtimes explicitly with `--runtime claude,codex,omp` (or `all`). Runtime-only setup uses `--no-git-hooks`. This is explicit repository opt-in; it never starts an authority, claims work, changes hook trust, or modifies another repository.
 
-Static desired configuration lives in `.wr/config.json`. Only wr-next's own entries are merged into `.claude/settings.json` / `.codex/hooks.json`; OMP gets `.omp/extensions/wr-next.ts`. Existing settings/hooks are preserved. Codex `config.toml` is not rewritten. Review project and exact-hook trust in Codex `/hooks`; restart runtimes after changing integration settings.
+Static desired configuration lives in `.wr/config.json`. Only wr-next's own entries are merged into `.claude/settings.json` / `.codex/hooks.json`; OMP gets `.omp/extensions/wr-next.ts`. Enabled runtimes also install the `wr-next` usage skill: `.claude/skills/wr-next/` for Claude and `.agents/skills/wr-next/` for Codex/OMP/Devin discovery. Existing settings/hooks are preserved. Codex `config.toml` is not rewritten. Review project and exact-hook trust in Codex `/hooks`; restart runtimes after changing integration settings.
 
 ```sh
 wr-next integrations install codex

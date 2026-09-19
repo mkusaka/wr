@@ -1,0 +1,4 @@
+interface:
+  display_name: "wr-next"
+  short_description: "Plan, claim, and report work with wr-next"
+  default_prompt: "Use $wr-next to inspect ready work, claim it, and report results."
