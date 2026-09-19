@@ -588,10 +588,9 @@ export async function coordinatorHook(input: string, source: string, expected: s
     const key = digest({ root, source: runtime, session: parentSession, owner }), ownerFile = join(stateHome(), "coordinator-owners", `${key}.json`);
     requireInstalled(root, runtime);
     registration = await refreshAgentAuthority(registration);
-    if (!existsSync(ownerFile) && (expected !== "SessionStart" || payload.source === "compact")) {
-        demand(expected !== "PreToolUse", "COORDINATOR_NOT_ACTIVE", "No root bootstrap receipt. Restart the runtime after approving the repository integration");
+    // No bootstrap receipt = this session predates or missed enrollment; pass through unmanaged.
+    if (!existsSync(ownerFile) && (expected !== "SessionStart" || payload.source === "compact"))
         return true;
-    }
     let bridge: CoordinatorBridge;
     if (!existsSync(ownerFile)) {
         await reapCoordinators(stateHome(), registration);
