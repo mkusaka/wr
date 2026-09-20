@@ -66,6 +66,7 @@ function fakeClaude(f: {
 }, commands: string[], options: {
     compact?: boolean;
     extra?: Record<string, unknown>;
+    extraAt?: Record<number, Record<string, unknown>>;
     raw?: unknown;
     denyAt?: number;
     denialHook?: "PermissionDenied" | "PostToolBatch";
@@ -83,7 +84,8 @@ async function hook(name,fields={}){ const command=settings.hooks[name]?.[0]?.ho
 (async()=>{
  const start=await hook('SessionStart',{source:'startup'});calls.push({name:'start',...start});
  ${options.compact ? "calls.push({name:'compact',...await hook('SessionStart',{source:'compact',event_id:'same-window'})});" : ""}
- for(let i=0;i<commands.length;i++){const command=commands[i], id='tool-'+i;const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},...${JSON.stringify(options.extra ?? {})}}); const denied=pre.code!==0||pre.json.hookSpecificOutput?.permissionDecision==='deny';
+ const extraAt=${JSON.stringify(options.extraAt ?? {})};
+ for(let i=0;i<commands.length;i++){const command=commands[i], id='tool-'+i;const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},...${JSON.stringify(options.extra ?? {})},...extraAt[i]}); const denied=pre.code!==0||pre.json.hookSpecificOutput?.permissionDecision==='deny';
  if(denied){calls.push({name:'denied',command,pre});continue;}
  if(i===${JSON.stringify(options.denyAt ?? -1)}){const post=await hook(${JSON.stringify(options.denialHook ?? "PostToolBatch")},{tool_name:'Bash',tool_use_id:id,tool_calls:[{tool_name:'Bash',tool_use_id:id,tool_response:'Permission denied'}]});calls.push({name:'permission-denied',command,pre,post});continue;}
  const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);const post=await hook(runtime==='claude'&&result.code!==0?'PostToolUseFailure':'PostToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}}); calls.push({name:'tool',command,pre,result,post}); }
@@ -105,6 +107,7 @@ async function rootBash(id,command){const pre=await hook('PreToolUse',{prompt_id
 await hook('SessionStart',{source:'startup'});
 const added=JSON.parse((await rootBash('add',"wr-next add 'Child review'")).out);
 const delegated=JSON.parse((await rootBash('delegate',\`wr-next delegate \${added.result.id} --role reviewer --read-only\`)).out);
+await rootBash('own-add',"wr-next add 'Parent task'");await rootBash('own-claim',"wr-next next --claim");
 const missing=await hook('PreToolUse',{prompt_id:'missing-turn',tool_name:'Agent',tool_use_id:'missing-agent',tool_input:{prompt:'No assignment\\nReview'}});if(missing.json.hookSpecificOutput?.permissionDecision!=='deny')throw new Error('unassigned native spawn was not denied');
 const agentInput={description:'Review child',subagent_type:'Explore',prompt:delegated.spawnDirective+'\\nReview the assigned work and submit a result.'};
 const agentPre=await hook('PreToolUse',{prompt_id:'child-turn',tool_name:'Agent',tool_use_id:'agent-tool',tool_input:agentInput});
@@ -144,6 +147,7 @@ async function childBash(agent,id,command){const pre=await hook('PreToolUse',{ag
  await hook('SessionStart',{source:'startup'});
  const workA=JSON.parse((await rootBash('add-a',"wr-next add 'Codex native review A'")).out),workB=JSON.parse((await rootBash('add-b',"wr-next add 'Codex native review B'")).out),workC=JSON.parse((await rootBash('add-c',"wr-next add 'Codex malformed response'")).out);
  const delegationA=JSON.parse((await rootBash('delegate-a',\`wr-next delegate \${workA.result.id} --role reviewer --read-only\`)).out),delegationB=JSON.parse((await rootBash('delegate-b',\`wr-next delegate \${workB.result.id} --role reviewer --read-only\`)).out),delegationC=JSON.parse((await rootBash('delegate-c',\`wr-next delegate \${workC.result.id} --role reviewer --read-only\`)).out);
+ await rootBash('add-parent',"wr-next add 'Parent task'");await rootBash('claim',"wr-next next --claim");
  const unassigned=await hook('PreToolUse',{tool_name:'spawn_agent',tool_use_id:'unassigned',tool_input:{message:'Review without a delegated assignment'}});
  const spawnA={message:delegationA.spawnDirective+'\\nReview work A.'},spawnB={message:delegationB.spawnDirective+'\\nReview work B.'},spawnC={message:delegationC.spawnDirective+'\\nReject this malformed response.'};
  const preA=await hook('PreToolUse',{tool_name:'spawn_agent',tool_use_id:'spawn-a',tool_input:spawnA}),preB=await hook('PreToolUse',{tool_name:'multi_agent_v1spawn_agent',tool_use_id:'spawn-b',tool_input:spawnB}),preC=await hook('PreToolUse',{tool_name:'Agent',tool_use_id:'spawn-c',tool_input:spawnC});
@@ -208,6 +212,7 @@ writeFileSync('root-session.jsonl','');mkdirSync('root-session');const root=host
 mkdirSync('unknown-parent');writeFileSync('unknown-parent.jsonl','');const unknown=host('unknown-session','unknown-parent/unknown-child.jsonl');await call(unknown,'session_start');const unbound=await call(unknown,'tool_call',{toolName:'read',toolCallId:'unknown-read',input:{path:'package.json'}});if(!unbound?.block)throw new Error('unbound task child bootstrapped a root Coordinator');
 const added=JSON.parse((await bash(root,'add',"wr-next add 'OMP child review'")).out);
 const delegated=JSON.parse((await bash(root,'delegate',\`wr-next delegate \${added.result.id} --role reviewer --read-only\`)).out);
+await bash(root,'own-add',"wr-next add 'Parent task'");await bash(root,'own-claim',"wr-next next --claim");
 const taskInput={name:'NativeTaskChild',agent:'reviewer',task:delegated.spawnDirective+'\\nInspect the assigned work and report it.'};
 const taskPre=await call(root,'tool_call',{toolName:'task',toolCallId:'omp-task',input:taskInput});if(taskPre?.block)throw new Error(taskPre.reason);
 await root.emit('task:subagent:lifecycle',{id:'NativeTaskChild',agent:'reviewer',agentSource:'bundled',parentToolCallId:'omp-task',index:0,status:'started',sessionFile:'root-session/NativeTaskChild.jsonl'});
@@ -282,11 +287,11 @@ test("plain Claude process uses actual installed hooks and per-tool contexts wit
         const calls = JSON.parse(result.stdout) as any[];
         assert.equal(calls[0].code, 0, calls[0].err);
         assert.match(calls[0].json.hookSpecificOutput.additionalContext, /coordinate work/);
-        assert.equal(calls.filter(c => c.name === "denied").length, 1);
+        assert.equal(calls.filter(c => c.name === "denied").length, 0);
         for (const c of calls.filter(c => c.name === "tool")) {
             assert.equal(c.result.code, 0, c.result.err);
             assert.equal(c.post.code, 0, c.post.err);
-            assert.equal(c.pre.json.hookSpecificOutput.permissionDecision, undefined);
+            assert.equal(c.pre.json.hookSpecificOutput?.permissionDecision, undefined);
         }
         const last = calls.filter(c => c.name === "tool").at(-1);
         assert.equal(JSON.parse(last.result.out).idle, true);
@@ -614,12 +619,12 @@ test("inherited native child identity cannot claim root work through the permane
     const f = await fixture();
     try {
         await init(f);
-        const fake = fakeClaude(f, ["wr-next next --claim"], { extra: { agent_id: "native-child" } });
+        const fake = fakeClaude(f, ["wr-next add 'Parent task'", "wr-next next --claim", "wr-next next --claim"], { extraAt: { 2: { agent_id: "native-child" } } });
         const result = await run([fake], f.repo, f.env);
         assert.equal(result.code, 0, result.stderr);
         const calls = JSON.parse(result.stdout);
         assert.equal(calls.find((c: any) => c.name === "denied").pre.json.hookSpecificOutput.permissionDecision, "deny");
-        assert.equal(Object.keys(f.server.workspace.store.snapshot().executions).length, 0);
+        assert.equal(Object.keys(f.server.workspace.store.snapshot().executions).length, 1);
     }
     finally {
         await f.close();

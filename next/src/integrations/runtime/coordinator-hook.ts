@@ -278,6 +278,9 @@ function prepareClaudeSpawn(bridge: CoordinatorBridge, payload: Record<string, u
 }
 async function handleClaudeChildEvent(bridge: CoordinatorBridge, payload: Record<string, unknown>, expected: string): Promise<boolean> {
     const agentId = typeof payload.agent_id === "string" ? payload.agent_id : null;
+    // Children of an unclaimed (unmanaged) root are unmanaged as well.
+    if (!(await new Client(bridge.context).request<any>("/v1/coordination")).currentExecution)
+        return true;
     if (expected === "SubagentStart") {
         demand(agentId, "INVALID_EVENT", "SubagentStart requires an agent identity");
         const correlation = childCorrelation(payload), pendingPath = pendingChildPath(bridge);
@@ -358,6 +361,9 @@ async function handleOmpChildEvent(bridge: CoordinatorBridge, payload: Record<st
         return false;
     const path = ompBoundChildPath(bridge, session, agentId);
     const native = NativeRuntimeBridge.fromCoordinator(bridge.adapter, bridge.context.runtimeAgent);
+    // Children of an unclaimed (unmanaged) root are unmanaged as well.
+    if (!(await new Client(bridge.context).request<any>("/v1/coordination")).currentExecution)
+        return true;
     if (expected === "SubagentStart") {
         if (existsSync(path)) {
             const child = readPrivateJson<OmpBoundChild>(path);
@@ -449,7 +455,9 @@ function prepareCodexSpawn(bridge: CoordinatorBridge, payload: Record<string, un
 }
 async function publishCodexChild(bridge: CoordinatorBridge, payload: Record<string, unknown>): Promise<void> {
     const path = codexPendingPath(bridge, payload);
-    demand(existsSync(path), "NATIVE_ASSIGNMENT_REQUIRED", "Codex spawn result has no exact pending assignment");
+    // Unmanaged spawn results carry no pending assignment; observe only.
+    if (!existsSync(path))
+        return;
     const pending = readPrivateJson<PendingChild>(path);
     demand(pending.version === 1 && pending.session === payload.session_id && pending.parentRuntimeAgent === bridge.context.runtimeAgent && pending.toolId === payload.tool_use_id && pending.correlation === codexCorrelation(payload), "NATIVE_CORRELATION_CONFLICT", "Codex spawn result does not match its pending tool invocation");
     const result = typeof payload.tool_response === "string" ? JSON.parse(payload.tool_response) : payload.tool_response;
@@ -495,6 +503,9 @@ async function handleCodexChildEvent(bridge: CoordinatorBridge, payload: Record<
     const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
     demand(agentId.length > 0, "UNBOUND_RUNTIME_ACTOR", "Codex child events require the actual agent_id");
     const session = String(payload.session_id);
+    // Children of an unclaimed (unmanaged) root are unmanaged as well.
+    if (!(await new Client(bridge.context).request<any>("/v1/coordination")).currentExecution)
+        return true;
     let child = codexChild(bridge, session, agentId);
     if (expected === "SubagentStop") {
         const eventId = digest({ type: "codex-child-stop", agentId, turn: payload.turn_id, message: payload.last_assistant_message });
@@ -620,6 +631,13 @@ export async function coordinatorHook(input: string, source: string, expected: s
         return true;
     }
     if (expected === "PreToolUse") {
+        const input = payload.tool_input ?? {};
+        const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
+        const state = await new Client(bridge.context).request<any>("/v1/coordination");
+        // An unclaimed session is unmanaged; only bounded wr-next management commands
+        // get the coordinator context so `next --claim` can bind work to this root.
+        if (!state.currentExecution && !(shell && typeof input.command === "string" && managementCommand(input.command)))
+            return true;
         const nativeTools: Record<typeof runtime, string[]> = {
             claude: ["Agent", "Task", "SendMessage"],
             codex: [...codexSpawnTools, ...codexSendTools, ...codexWaitTools, "resume_agent", "close_agent", "multi_agent_v1resume_agent", "multi_agent_v1close_agent"],
@@ -630,7 +648,6 @@ export async function coordinatorHook(input: string, source: string, expected: s
         const supportedOmpSpawn = runtime === "omp" && payload.tool_name === "task";
         const supportedCodexSpawn = runtime === "codex" && codexSpawnTools.includes(payload.tool_name);
         const supportedCodexConversation = runtime === "codex" && codexConversation(bridge, payload);
-        const input = payload.tool_input ?? {};
         if (nativeTool && !supportedNativeSpawn && !supportedOmpSpawn && !supportedCodexSpawn && !supportedCodexConversation || input.run_in_background === true) {
             console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: nativeTool ? `${runtime} native operation is outside the supported read-only child profile.` : "Background writers are not supported by this coordinator profile." } }));
             return true;
@@ -648,15 +665,6 @@ export async function coordinatorHook(input: string, source: string, expected: s
                 console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: error instanceof Error ? error.message : String(error) } }));
                 return true;
             }
-        }
-        const state = await new Client(bridge.context).request<any>("/v1/coordination");
-        const canRead = ["Read", "read", "Grep", "grep", "Glob", "glob", "WebSearch", "web_search", "WebFetch", "web_fetch"].includes(payload.tool_name);
-        const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
-        const nativeHub = payload.tool_name === "hub" && nativeHubConversation(input);
-        const deniedUnclaimed = !state.currentExecution && !canRead && !nativeHub && !supportedNativeSpawn && !supportedOmpSpawn && !supportedCodexSpawn && !supportedCodexConversation && !(shell && typeof input.command === "string" && managementCommand(input.command));
-        if (deniedUnclaimed) {
-            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: expected, permissionDecision: "deny", permissionDecisionReason: "Claim work before implementation. Use a separate wr-next next --claim tool call." } }));
-            return true;
         }
         demand(typeof payload.tool_use_id === "string", "INVALID_EVENT", "Tool identity is required for stable assignment");
         let env: NodeJS.ProcessEnv;
