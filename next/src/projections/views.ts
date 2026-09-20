@@ -62,7 +62,8 @@ export type View = {
     total: number;
 };
 function summary(s: State, w: Work): Summary {
-    const active = values(s.executions).some(e => e.work === w.id && e.state === "active");
+    const activeExecs = values(s.executions).filter(e => e.work === w.id && e.state === "active");
+    const active = activeExecs.length > 0, writer = activeExecs.find(e => e.mode === "write");
     const result = values(s.results).filter(r => r.work === w.id).at(-1);
     const holds = values(s.holds).some(h => h.work === w.id && !h.resolvedAt);
     const why = reasons(s, w);
@@ -76,6 +77,11 @@ function summary(s: State, w: Work): Summary {
             if (last?.status !== "passed")
                 why.push(`check:${name}:${last?.status ?? "missing"}`);
         }
+    const writerReason = why.indexOf("active_writer");
+    if (writerReason >= 0 && writer)
+        why[writerReason] = `writer:${writer.role}/${writer.mode}`;
+    for (const e of activeExecs.filter(e => e.mode === "read"))
+        why.push(`reader:${e.role}/read`);
     const latestExecution = values(s.executions).filter(e => e.work === w.id).at(-1);
     const availability = active ? "running" : w.state !== "open" ? "terminal" : holds ? "held" : currentResult ? "waiting_checks" : latestExecution?.state === "interrupted" ? "interrupted" : why.length ? "blocked" : aggregate ? "aggregate" : "ready";
     return { id: w.id, key: w.key, title: w.title, state: w.state, phase: w.phase, availability, reasons: why, scopeRevision: w.scopeRevision, acceptanceSource: w.acceptance ? s.acceptances[w.acceptance]!.source : null, links: w.links };
