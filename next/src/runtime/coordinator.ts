@@ -74,13 +74,22 @@ export class CoordinatorBridge {
     async stop(processStopped = false): Promise<void> { await new Client(this.observer).command({ type: "coordination.stop", processStopped }, { id: digest({ coordinator: this.context.coordinator, stopped: processStopped }) }); }
     async guidance(): Promise<string> {
         const state = await new Client(this.context).request<any>("/v1/coordination");
+        const ready = await new Client(this.context).request<any>("/v1/ready?limit=5").catch(() => null);
+        const readyItems = (ready?.ready ?? []) as {
+            key?: string;
+            id: string;
+            title: string;
+        }[];
         return [
-            `You coordinate work within ${state.title}. No implementation work is assigned merely by session start.`,
-            "Interpret the user's request, inspect wr-next status/ready, and create or adjust a small plan using wr-next add or wr-next plan --changes. Do not ask the user to manage Work IDs.",
-            "Use wr-next claim <ref> for a deliberate choice, or wr-next next --claim for deterministic ready selection. Never choose unrelated backlog just because it is ready. Empty ready means create relevant work or explain its blockers, not completion.",
-            "After claim, use wr-next report for decisions/blockers and wr-next done --summary to submit. Completion is policy checked. Submit/yield in a separate tool call; the next tool sees the new assignment. Do not keep background writers across handoff.",
-            this.context.runtime === "claude" ? "A read-only foreground Claude child requires an explicit assignment: run wr-next delegate REF --read-only, then put the returned spawnDirective on the first line of exactly one Agent prompt. Nested/background children are denied." : this.context.runtime === "codex" ? "Codex supports only explicit MAv1 read-only children: run wr-next delegate REF --read-only, then put its spawnDirective first in exactly one spawn_agent, Agent, or multi_agent_v1spawn_agent message. A child without its exact receipt within 3 seconds is denied and never inherits this root context. Root spawn and verified same-root native send/wait need no Work claim; MAv2, nested, writable, close, and resume controls are denied." : this.context.runtime === "omp" ? "Each OMP task child requires a distinct --read-only delegation directive on the first line of its task. Only bound inspection tools, bounded wr-next/Git shell commands, and native hub conversations are available; write-capable and nested native tools are denied." : "Native subagents are not safely bindable from this runtime's current spawn-correlation profile; use explicit delegated runs. Never reuse this root's context.",
-            state.currentExecution ? "A current work attempt exists. Read status before continuing; old prose is not evidence of current completion." : "No current work. You may inspect and plan; claim before editing files.",
+            `wr-next can coordinate work within ${state.title}. This session is unmanaged until it claims work — tools are not gated, and claiming is opt-in.`,
+            ...(readyItems.length
+                ? [`Ready work: ${readyItems.map(w => `${w.key ?? w.id} ${w.title}`).join("; ")}. If the user's task matches, bind it with wr-next next --claim or wr-next claim <ref>; never claim unrelated backlog just because it is ready.`]
+                : []),
+            state.currentExecution
+                ? "A claimed work attempt is bound to this session. Read wr-next status before continuing; old prose is not evidence of current completion."
+                : "To track work here: wr-next status/ready to inspect, wr-next add or plan --changes to create work, wr-next next --claim to bind it to this session.",
+            "While claimed: wr-next report records decisions/blockers and wr-next done --summary or yield submits. Completion is policy checked; submit in a separate tool call and do not keep background writers across handoff.",
+            this.context.runtime === "claude" ? "While claimed, a foreground Claude child requires an explicit assignment: run wr-next delegate REF --read-only, then put the returned spawnDirective on the first line of exactly one Agent prompt. Nested/background children of claimed sessions are denied." : this.context.runtime === "codex" ? "While claimed, Codex supports only explicit MAv1 read-only children: run wr-next delegate REF --read-only, then put its spawnDirective first in exactly one spawn_agent, Agent, or multi_agent_v1spawn_agent message. MAv2, nested, writable, close, and resume controls are denied." : this.context.runtime === "omp" ? "While claimed, each OMP task child requires a distinct --read-only delegation directive on the first line of its task. Only bound inspection tools, bounded wr-next/Git shell commands, and native hub conversations are available to bound children." : "Native subagents are not safely bindable from this runtime's current spawn-correlation profile; use explicit delegated runs. Never reuse this root's context.",
         ].join("\n");
     }
 }
