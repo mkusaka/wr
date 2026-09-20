@@ -102,9 +102,24 @@ export function view(s: State, p: Principal, target?: string, since = 0, limit =
     const page = events.slice(0, 100);
     const notes = events.filter(e => ["work.progress", "work.decision", "work.blocked"].includes(e.type)).map(e => ({ seq: e.seq, work: e.work ? s.work[e.work]?.key ?? null : null, kind: e.type.slice(5), summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? String((e.payload as Record<string, unknown>).summary) : "" }));
     const holds = values(s.holds).filter(h => !h.resolvedAt && allowed.has(h.work)).map(h => ({ work: s.work[h.work]!.key, reason: h.reason, authority: h.authority }));
+    const describe = (e: (typeof events)[number]): string => {
+        const p = e.payload as Record<string, unknown>;
+        if (typeof p?.summary === "string")
+            return p.summary;
+        if (e.type === "git.commit" && typeof p?.artifact === "string") {
+            const a = s.artifacts[p.artifact];
+            if (a)
+                return `commit ${a.sha.slice(0, 12)} ${a.subject}`;
+        }
+        if (e.type === "execution.started")
+            return `started ${p?.role ?? "worker"}/${p?.mode ?? "write"}`;
+        if (e.type === "runtime.child_observed")
+            return `child observed${p?.bound ? "" : " (unbound)"}`;
+        return e.type;
+    };
     const coordinator = p.role === "coordinator" ? coordinatorFor(s, p) : null;
     const current = coordinator?.currentExecution ? s.executions[coordinator.currentExecution] : null;
-    return { ...(coordinator ? { assignment: current ? { work: s.work[current.work]!.key, execution: current.id, scopeRevision: current.scopeRevision } : null } : {}), context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), notes, holds, recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? (e.payload as Record<string, unknown>).summary : e.type })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
+    return { ...(coordinator ? { assignment: current ? { work: s.work[current.work]!.key, execution: current.id, scopeRevision: current.scopeRevision } : null } : {}), context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), notes, holds, recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: describe(e) })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
 }
 const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 export function textView(v: View): string {
