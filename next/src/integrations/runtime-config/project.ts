@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, rmdirSync, openSync, closeSync, fsyncSync, accessSync, constants, realpathSync } from "node:fs";
 import { dirname, join, delimiter } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { demand, digest, Fault } from "../../domain/util.js";
 import { git, gitPath, tryGit } from "../../git/repository.js";
@@ -233,14 +234,17 @@ function renderFile(root: string, runtime: Exclude<RuntimeName, "devin">, enable
         after = before;
     return { change: { path, before, after, mode }, ...(enable ? { owned: { runtime, path: relative, groups: expected, created } } : {}) };
 }
-/** Bundled skill sources live next to the package root, four levels above this module. */
+/** Bundled skill sources live at the package root; this module sits at src/ or dist/src/, so walk up. */
 const skillSources: Record<string, string> = {
     ".agents/skills/wr-next/SKILL.md": "SKILL.md",
     ".agents/skills/wr-next/agents/openai.yaml": "agents/openai.yaml",
     ".claude/skills/wr-next/SKILL.md": "SKILL.md",
 };
 function skillContent(relative: string): string {
-    return readFileSync(new URL(`../../../../skills/wr-next/${skillSources[relative]}`, import.meta.url), "utf8");
+    let dir = dirname(fileURLToPath(import.meta.url));
+    while (!existsSync(join(dir, "skills/wr-next", skillSources[relative]!)) && dirname(dir) !== dir)
+        dir = dirname(dir);
+    return readFileSync(join(dir, "skills/wr-next", skillSources[relative]!), "utf8");
 }
 function renderSkill(root: string, relative: string, enable: boolean, old?: OwnedSkill): {
     change: Change;

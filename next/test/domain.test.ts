@@ -93,4 +93,19 @@ test("delegation token is single use and scope bound", () => {
 });
 test("unsupported policies and unexpected authority fields are rejected", () => { const f = fixture(); assert.throws(() => f.add("bad", { policy: { name: "invented", checks: [] } })); assert.throws(() => f.cmd({ type: "work.create", title: "bad", verified: true })); f.sql.close(); });
 test("projections share state, escape user titles and include cursor", () => { const f = fixture(), w = f.add('a\"] --> injected["<script>'); const v = view(f.state(), owner); assert.equal(v.items[0]!.key, w.key); assert.match(workpad(v), /snapshot=r/); const graph = mermaid(v); assert.ok(!graph.includes("<script>")); assert.equal(graph.split("\n").filter(l => l.includes(" -->|")).length, 0); assert.equal(mermaid(v), mermaid(v)); f.sql.close(); });
+test("workpad renders a status document with next step, decisions, blockers and links", () => {
+    const f = fixture();
+    const parent = f.add("parent", { description: "do the thing", links: ["https://example.test/pr/1"] }), child = f.add("child", { parent: parent.id });
+    f.cmd({ type: "work.report", work: child.id, kind: "decision", summary: "wrap devin in wr-next run" });
+    f.cmd({ type: "work.report", work: child.id, kind: "blocked", summary: "waiting on owner" });
+    const pad = workpad(view(f.state(), owner, parent.id));
+    assert.match(pad, /## Objective\n\ndo the thing/);
+    assert.match(pad, /## Next\n\n- Resolve blocker on W2: waiting on owner/);
+    assert.match(pad, /## Held\n\n- W2: child\n/);
+    assert.match(pad, /## Decisions\n\n- W2: wrap devin in wr-next run/);
+    assert.match(pad, /## Blockers\n\n- W2: waiting on owner \(operator\)/);
+    assert.match(pad, /## Links\n\n- W1: https:\/\/example\.test\/pr\/1/);
+    assert.match(pad, /## Recent changes/);
+    f.sql.close();
+});
 test("git context binding mismatch is quarantined, not invented attribution", () => { const f = fixture(), w = f.add(), e = f.start(w.id); const snapshot: CommitSnapshot = { id: "ctx", work: w.id, execution: e.execution, scopeRevision: 1, generation: 1, repo: "local:r", tree: OTHER, base: null, branch: "main", capturedAt: new Date().toISOString(), contributors: [] }; const r = f.cmd({ type: "git.commit", snapshot, snapshotDigest: digest(snapshot), commit: { repo: "local:r", sha: SHA, tree: SHA, parents: [], subject: "x", author: "A", committer: "A" } }, f.collector(e.execution), true); assert.deepEqual(r.result.gaps, ["tree_mismatch"]); assert.ok(!Object.values(f.state().contributions).some(c => c.relation === "committed_by")); f.sql.close(); });

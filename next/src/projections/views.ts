@@ -12,6 +12,18 @@ export type Summary = {
     reasons: string[];
     scopeRevision: number;
     acceptanceSource: string | null;
+    links: string[];
+};
+export type Note = {
+    seq: number;
+    work: string | null;
+    kind: string;
+    summary: string;
+};
+export type HoldView = {
+    work: string;
+    reason: string;
+    authority: string;
 };
 export type View = {
     assignment?: {
@@ -42,6 +54,8 @@ export type View = {
     submitted: string[];
     held: string[];
     interrupted: string[];
+    notes: Note[];
+    holds: HoldView[];
     recent: unknown[];
     cursor: number;
     hasMore: boolean;
@@ -64,7 +78,7 @@ function summary(s: State, w: Work): Summary {
         }
     const latestExecution = values(s.executions).filter(e => e.work === w.id).at(-1);
     const availability = active ? "running" : w.state !== "open" ? "terminal" : holds ? "held" : currentResult ? "waiting_checks" : latestExecution?.state === "interrupted" ? "interrupted" : why.length ? "blocked" : aggregate ? "aggregate" : "ready";
-    return { id: w.id, key: w.key, title: w.title, state: w.state, phase: w.phase, availability, reasons: why, scopeRevision: w.scopeRevision, acceptanceSource: w.acceptance ? s.acceptances[w.acceptance]!.source : null };
+    return { id: w.id, key: w.key, title: w.title, state: w.state, phase: w.phase, availability, reasons: why, scopeRevision: w.scopeRevision, acceptanceSource: w.acceptance ? s.acceptances[w.acceptance]!.source : null, links: w.links };
 }
 export function view(s: State, p: Principal, target?: string, since = 0, limit = 1000, offset = 0): View {
     let root: string | null = target ? findWork(s, target).id : p.execution ? s.executions[p.execution]?.work ?? null : null;
@@ -86,9 +100,11 @@ export function view(s: State, p: Principal, target?: string, since = 0, limit =
     const items = all.slice(offset, offset + limit).map(w => summary(s, w));
     const events = values(s.events).filter(e => e.seq > since && (!root || e.work !== null && allowed.has(e.work))).sort((a, b) => a.seq - b.seq);
     const page = events.slice(0, 100);
+    const notes = events.filter(e => ["work.progress", "work.decision", "work.blocked"].includes(e.type)).map(e => ({ seq: e.seq, work: e.work ? s.work[e.work]?.key ?? null : null, kind: e.type.slice(5), summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? String((e.payload as Record<string, unknown>).summary) : "" }));
+    const holds = values(s.holds).filter(h => !h.resolvedAt && allowed.has(h.work)).map(h => ({ work: s.work[h.work]!.key, reason: h.reason, authority: h.authority }));
     const coordinator = p.role === "coordinator" ? coordinatorFor(s, p) : null;
     const current = coordinator?.currentExecution ? s.executions[coordinator.currentExecution] : null;
-    return { ...(coordinator ? { assignment: current ? { work: s.work[current.work]!.key, execution: current.id, scopeRevision: current.scopeRevision } : null } : {}), context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? (e.payload as Record<string, unknown>).summary : e.type })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
+    return { ...(coordinator ? { assignment: current ? { work: s.work[current.work]!.key, execution: current.id, scopeRevision: current.scopeRevision } : null } : {}), context: root ? { title: s.work[root]!.title, description: s.work[root]!.description.slice(0, 6000), truncated: s.work[root]!.description.length > 6000 } : null, revision: s.meta.revision, snapshot: `r${s.meta.revision}`, scope: root, items, dependencies: values(s.dependencies).filter(d => allowed.has(d.dependent)).map(d => ({ from: d.prerequisite, to: d.dependent, predicate: d.predicate })), parents: all.filter(w => w.parent && allowed.has(w.parent)).map(w => ({ from: w.parent!, to: w.id })), running: items.filter(i => i.availability === "running").map(i => i.key), ready: items.filter(i => i.availability === "ready").map(i => i.key), submitted: items.filter(i => i.availability === "waiting_checks").map(i => i.key), held: items.filter(i => i.availability === "held" || i.availability === "blocked").map(i => i.key), interrupted: items.filter(i => i.availability === "interrupted").map(i => i.key), notes, holds, recent: page.map(e => ({ seq: e.seq, type: e.type, work: e.work ? s.work[e.work]?.key ?? null : null, source: e.source, summary: typeof (e.payload as Record<string, unknown>)?.summary === "string" ? (e.payload as Record<string, unknown>).summary : e.type })), cursor: page.at(-1)?.seq ?? Math.max(since, s.meta.sequence), hasMore: page.length < events.length || offset + limit < all.length, total: all.length };
 }
 const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 export function textView(v: View): string {
@@ -114,12 +130,28 @@ export function workpad(v: View): string {
     const lines = [`<!-- wr-next generated snapshot=${v.snapshot}; do not edit -->`, `# ${clean(title)}`, ""];
     if (v.context?.description)
         lines.push("## Objective", "", v.context.description, "", ...(v.context.truncated ? ["Description truncated; retrieve the full work record.", ""] : []));
-    for (const status of ["running", "ready", "waiting_checks", "held", "blocked", "interrupted", "terminal", "aggregate"]) {
-        const rows = v.items.filter(i => i.availability === status);
-        if (!rows.length)
-            continue;
-        lines.push(`## ${status}`, "", ...rows.map(w => `- ${w.key}: ${clean(w.title)}${w.reasons.length ? ` (${w.reasons.join(", ")})` : ""}`), "");
+    const notes = v.notes ?? [], holds = v.holds ?? [];
+    const open = (i: Summary) => i.state === "open";
+    const ready = v.items.find(i => open(i) && i.availability === "ready"), waiting = v.items.find(i => open(i) && i.availability === "waiting_checks"), running = v.items.find(i => open(i) && i.availability === "running");
+    lines.push("## Next", "", ready ? `- Claim ${ready.key}: ${clean(ready.title)}` : waiting ? `- Finish checks on ${waiting.key}: ${clean(waiting.title)}` : running ? `- ${running.key} is running: ${clean(running.title)}` : holds.length ? `- Resolve blocker on ${holds[0]!.work}: ${clean(holds[0]!.reason)}` : v.items.every(i => i.availability === "terminal") ? "- All work terminal." : "- No ready work; inspect `wr-next status` for reasons.", "");
+    for (const [label, status] of [["Running", "running"], ["Waiting checks", "waiting_checks"], ["Ready", "ready"], ["Held", "held"], ["Blocked", "blocked"], ["Interrupted", "interrupted"], ["Aggregate", "aggregate"], ["Done", "done"], ["Cancelled", "cancelled"]] as const) {
+        const rows = v.items.filter(i => status === "done" || status === "cancelled" ? i.state === status : i.state === "open" && i.availability === status);
+        if (rows.length)
+            lines.push(`## ${label}`, "", ...rows.map(w => {
+                const why = w.reasons.filter(r => r !== "terminal" && r !== "held");
+                return `- ${w.key}: ${clean(w.title)}${why.length ? ` (${why.join(", ")})` : ""}`;
+            }), "");
     }
+    const decisions = notes.filter(n => n.kind === "decision"), progress = notes.filter(n => n.kind === "progress");
+    if (decisions.length)
+        lines.push("## Decisions", "", ...decisions.map(n => `- ${n.work ?? "workspace"}: ${clean(n.summary)}`), "");
+    if (holds.length)
+        lines.push("## Blockers", "", ...holds.map(h => `- ${h.work}: ${clean(h.reason)} (${h.authority})`), "");
+    if (progress.length)
+        lines.push("## Progress", "", ...progress.slice(-10).map(n => `- ${n.work ?? "workspace"}: ${clean(n.summary)}`), ...(progress.length > 10 ? [`- … ${progress.length - 10} earlier progress notes`] : []), "");
+    const links = v.items.flatMap(i => (i.links ?? []).map(l => `- ${i.key}: ${l}`));
+    if (links.length)
+        lines.push("## Links", "", ...links, "");
     lines.push("## Recent changes", "", ...v.recent.slice(-20).map(e => {
         const row = e as {
             work: string | null;
