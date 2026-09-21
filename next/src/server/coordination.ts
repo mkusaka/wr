@@ -9,7 +9,8 @@ export function coordinationCredentials(s: State, p: Principal, type: string, ou
 }, tokens: Tokens): unknown | null {
     if (type === "coordination.enable") {
         const g = grantFor(s, p, output.result.grant as string);
-        return { ...output, bootstrap: tokens.mint({ id: p.id, device: p.device, role: "bootstrap", grant: g.id, generation: g.generation }, 30 * 86400) };
+        // Refresh credential: effectively no TTL; revocation happens via grant.generation.
+        return { ...output, bootstrap: tokens.mint({ id: p.id, device: p.device, role: "bootstrap", grant: g.id, generation: g.generation }, 3650 * 86400) };
     }
     if (!["coordination.open", "coordination.dispatch", "coordination.credentials", "work.claim"].includes(type))
         return null;
