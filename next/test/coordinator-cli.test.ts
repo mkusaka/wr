@@ -67,6 +67,7 @@ function fakeClaude(f: {
     compact?: boolean;
     extra?: Record<string, unknown>;
     extraAt?: Record<number, Record<string, unknown>>;
+    expireContextAt?: number;
     raw?: unknown;
     denyAt?: number;
     denialHook?: "PermissionDenied" | "PostToolBatch";
@@ -85,7 +86,7 @@ async function hook(name,fields={}){ const command=settings.hooks[name]?.[0]?.ho
  const start=await hook('SessionStart',{source:'startup'});calls.push({name:'start',...start});
  ${options.compact ? "calls.push({name:'compact',...await hook('SessionStart',{source:'compact',event_id:'same-window'})});" : ""}
  const extraAt=${JSON.stringify(options.extraAt ?? {})};
- for(let i=0;i<commands.length;i++){const command=commands[i], id='tool-'+i;const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},...${JSON.stringify(options.extra ?? {})},...extraAt[i]}); const denied=pre.code!==0||pre.json.hookSpecificOutput?.permissionDecision==='deny';
+ for(let i=0;i<commands.length;i++){const command=commands[i], id='tool-'+i; if(i===${JSON.stringify(options.expireContextAt ?? -1)}){const fs=require('node:fs'),p=require('node:path'),d=fs.readdirSync(p.join(process.env.WR_NEXT_HOME,'coordinators'))[0],f=p.join(process.env.WR_NEXT_HOME,'coordinators',d,'controller.json'),c=JSON.parse(fs.readFileSync(f,'utf8')),parts=c.context.token.split('.');const pl=JSON.parse(Buffer.from(parts[1],'base64url').toString());pl.expires=Math.floor(Date.now()/1000)-10;parts[1]=Buffer.from(JSON.stringify(pl)).toString('base64url');c.context.token=parts.join('.');fs.writeFileSync(f,JSON.stringify(c));} const pre=await hook('PreToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},...${JSON.stringify(options.extra ?? {})},...extraAt[i]}); const denied=pre.code!==0||pre.json.hookSpecificOutput?.permissionDecision==='deny';
  if(denied){calls.push({name:'denied',command,pre});continue;}
  if(i===${JSON.stringify(options.denyAt ?? -1)}){const post=await hook(${JSON.stringify(options.denialHook ?? "PostToolBatch")},{tool_name:'Bash',tool_use_id:id,tool_calls:[{tool_name:'Bash',tool_use_id:id,tool_response:'Permission denied'}]});calls.push({name:'permission-denied',command,pre,post});continue;}
  const result=await exec(pre.json.hookSpecificOutput?.updatedInput?.command??command);const post=await hook(runtime==='claude'&&result.code!==0?'PostToolUseFailure':'PostToolUse',{tool_name:'Bash',tool_use_id:id,tool_input:{command},tool_response:{stdout:result.out,is_error:result.code!==0}}); calls.push({name:'tool',command,pre,result,post}); }
@@ -809,6 +810,23 @@ test("approved plain startup reuses its original database after authority restar
     finally {
         await cmd(["authority", "stop"]);
         rmSync(home, { recursive: true, force: true });
+    }
+});
+test("expired coordinator capability reopens through bootstrap instead of denying tools", async () => {
+    const f = await fixture();
+    try {
+        await init(f);
+        const fake = fakeClaude(f, ["echo survived"], { expireContextAt: 0 });
+        const out = await run([fake], f.repo, f.env, "claude");
+        assert.equal(out.code, 0, out.stderr);
+        const calls = JSON.parse(out.stdout);
+        assert.equal(calls.find((x: any) => x.name === "tool")?.result.code, 0);
+        const controller = JSON.parse(readFileSync(join(f.home, "coordinators", readdirSync(join(f.home, "coordinators"))[0]!, "controller.json"), "utf8"));
+        const next = JSON.parse(Buffer.from(controller.context.token.split(".")[1], "base64url").toString());
+        assert.ok(next.expires * 1000 > Date.now());
+    }
+    finally {
+        await f.close();
     }
 });
 test("permission refusal and resolved batch retire only the denied tool, without fake acceptance", async () => {

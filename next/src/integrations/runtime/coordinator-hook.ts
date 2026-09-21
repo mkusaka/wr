@@ -96,6 +96,15 @@ type OmpBoundChild = BoundChild & {
     assignmentId: string;
 };
 const coordinatorDirectory = (bridge: CoordinatorBridge) => dirname(bridge.contextFile);
+function capabilityExpired(token: string): boolean {
+    try {
+        const p = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString());
+        return typeof p.expires !== "number" || p.expires * 1000 <= Date.now() + 30000;
+    }
+    catch {
+        return true;
+    }
+}
 const pendingChildPath = (bridge: CoordinatorBridge) => join(coordinatorDirectory(bridge), "native-child.pending.json");
 const ompPendingChildrenPath = (bridge: CoordinatorBridge, toolId: string) => join(coordinatorDirectory(bridge), "omp-native-children", `${digest(toolId)}.json`);
 const boundChildPath = (bridge: CoordinatorBridge, agentId: string) => join(coordinatorDirectory(bridge), "children", `${digest(agentId)}.json`);
@@ -613,6 +622,17 @@ export async function coordinatorHook(input: string, source: string, expected: s
         demand(!record.ended && record.identity === owner.identity && record.session === parentSession && record.root === root, "STALE_COORDINATOR", "Recorded runtime has ended or no longer matches");
         bridge = CoordinatorBridge.restore(record.controller);
         refreshCoordinatorEndpoint(bridge, registration);
+        if (capabilityExpired(bridge.context.token)) {
+            // Coordinator capabilities live 24h; reopen through the 30d bootstrap
+            // grant instead of denying every tool call in a long-running session.
+            try {
+                bridge = await CoordinatorBridge.open(registration.bootstrap, { runtime, session: payload.session_id, actor: "root", invocation: digest({ owner, session: payload.session_id }), environment: registration.environment });
+                atomic(ownerFile, { ...owner, controller: join(bridge.contextFile, "..", "controller.json"), session: payload.session_id, root } satisfies Owner);
+            }
+            catch {
+                return true;
+            }
+        }
     }
     if (payload.agent_id || expected === "SubagentStart" || expected === "SubagentStop") {
         if (runtime === "claude")
@@ -633,10 +653,12 @@ export async function coordinatorHook(input: string, source: string, expected: s
     if (expected === "PreToolUse") {
         const input = payload.tool_input ?? {};
         const shell = payload.tool_name === "Bash" || payload.tool_name === "bash";
-        const state = await new Client(bridge.context).request<any>("/v1/coordination");
+        // If the authority cannot be queried (down, expired credentials), the
+        // session degrades to unmanaged rather than blocking every tool call.
+        const state = await new Client(bridge.context).request<any>("/v1/coordination").catch(() => null);
         // An unclaimed session is unmanaged; only bounded wr-next management commands
         // get the coordinator context so `next --claim` can bind work to this root.
-        if (!state.currentExecution && !(shell && typeof input.command === "string" && managementCommand(input.command)))
+        if (!state?.currentExecution && !(shell && typeof input.command === "string" && managementCommand(input.command)))
             return true;
         const nativeTools: Record<typeof runtime, string[]> = {
             claude: ["Agent", "Task", "SendMessage"],
