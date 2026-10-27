@@ -6,6 +6,10 @@ on:
       - "v*"
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions: {}
 
 jobs:
@@ -116,6 +120,7 @@ jobs:
           VERSION: ${{ needs.release.outputs.version }}
           RELEASE_URL: ${{ needs.release.outputs.release_url }}
           ARCHIVE_SUFFIX: ${{ matrix.archive_suffix }}
+        shell: bash
         run: |
           ./wr --help >/dev/null
           mkdir -p release-root/skills
@@ -181,6 +186,7 @@ jobs:
       - name: Render Homebrew formula
         env:
           VERSION: ${{ needs.release.outputs.version }}
+        shell: bash
         run: |
           DARWIN_ARM64_URL=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .asset_url' release-metadata-*.json)
           DARWIN_ARM64_SHA256=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .sha256' release-metadata-*.json)
