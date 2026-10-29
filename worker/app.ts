@@ -1873,7 +1873,8 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .from(schema.conversationLinks)
       .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
       .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
-      .where(deviceScope(schema.conversationLinks.deviceId, userId))
+      // Unary + keeps the planner on the created_at index so LIMIT stops the scan early.
+      .where(sql`+${deviceScope(schema.conversationLinks.deviceId, userId)}`)
       .orderBy(desc(schema.conversationLinks.createdAt))
       .limit(limit);
     const parentCliSessions = alias(schema.cliSessions, "index_parent_cli_sessions");
@@ -1911,7 +1912,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .innerJoin(schema.cliSessions, eq(schema.cliSessions.id, schema.sessionRuns.cliSessionId))
       .leftJoin(parentCliSessions, eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId))
       .innerJoin(schema.devices, eq(schema.devices.id, schema.sessionRuns.deviceId))
-      .where(deviceScope(schema.sessionRuns.deviceId, userId))
+      .where(sql`+${deviceScope(schema.sessionRuns.deviceId, userId)}`)
       .orderBy(desc(isNull(schema.sessionRuns.endedAt)), desc(schema.sessionRuns.lastSeenAt))
       .limit(limit);
     const taskRows = await db
@@ -1964,7 +1965,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         )), '[]')`,
       })
       .from(schema.tasks)
-      .orderBy(desc(inArray(schema.tasks.status, ["open", "active"])), desc(schema.tasks.updatedAt))
+      .orderBy(
+        desc(sql`${schema.tasks.status} = 'open' OR ${schema.tasks.status} = 'active'`),
+        desc(schema.tasks.updatedAt),
+      )
       .limit(limit);
     const pullRequestRows = await db
       .select({
@@ -2000,7 +2004,10 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         )), '[]')`,
       })
       .from(schema.pullRequests)
-      .orderBy(desc(eq(schema.pullRequests.state, "open")), desc(schema.pullRequests.updatedAt))
+      .orderBy(
+        desc(sql`${schema.pullRequests.state} = 'open'`),
+        desc(schema.pullRequests.updatedAt),
+      )
       .limit(limit);
     const total = (
       await Promise.all([

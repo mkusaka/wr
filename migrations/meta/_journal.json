@@ -57,6 +57,13 @@
       "when": 1787832545434,
       "tag": "0007_gorgeous_preak",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793251966038,
+      "tag": "0008_boring_mantis",
+      "breakpoints": true
     }
   ]
 }

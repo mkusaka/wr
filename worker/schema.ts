@@ -59,6 +59,10 @@ export const tasks = sqliteTable(
   },
   (table) => [
     check("tasks_status_check", sql`${table.status} IN ('open','active','done','cancelled')`),
+    index("tasks_current_updated_idx").on(
+      sql`${table.status} = 'open' OR ${table.status} = 'active'`,
+      table.updatedAt,
+    ),
   ],
 );
 
@@ -114,6 +118,7 @@ export const sessionRuns = sqliteTable(
   },
   (table) => [
     index("session_runs_device_active_idx").on(table.deviceId, table.endedAt, table.lastSeenAt),
+    index("session_runs_current_last_seen_idx").on(sql`${table.endedAt} IS NULL`, table.lastSeenAt),
   ],
 );
 
@@ -216,6 +221,7 @@ export const pullRequests = sqliteTable(
   (table) => [
     uniqueIndex("pull_requests_repo_number_unique").on(table.repo, table.number),
     check("pull_requests_state_check", sql`${table.state} IN ('open','closed','merged')`),
+    index("pull_requests_current_updated_idx").on(sql`${table.state} = 'open'`, table.updatedAt),
   ],
 );
 
@@ -310,5 +316,6 @@ export const conversationLinks = sqliteTable(
       table.provider,
       table.externalKey,
     ),
+    index("conversation_links_created_idx").on(table.createdAt),
   ],
 );
