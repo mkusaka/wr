@@ -1850,6 +1850,7 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
     const selectedDevice = c.req.query("device");
     const selectedRepository = c.req.query("repo");
     const selectedWorktree = c.req.query("worktree");
+    const limit = Math.min(Number.parseInt(c.req.query("limit") ?? "", 10) || 200, 1000);
     const conversationLinkRows = await db
       .select({
         id: schema.conversationLinks.id,
@@ -1873,7 +1874,8 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .leftJoin(schema.checkouts, eq(schema.checkouts.id, schema.conversationLinks.checkoutId))
       .innerJoin(schema.devices, eq(schema.devices.id, schema.conversationLinks.deviceId))
       .where(deviceScope(schema.conversationLinks.deviceId, userId))
-      .orderBy(desc(schema.conversationLinks.createdAt));
+      .orderBy(desc(schema.conversationLinks.createdAt))
+      .limit(limit);
     const parentCliSessions = alias(schema.cliSessions, "index_parent_cli_sessions");
     const runRows = await db
       .select({
@@ -1910,7 +1912,8 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .leftJoin(parentCliSessions, eq(parentCliSessions.id, schema.cliSessions.parentCliSessionId))
       .innerJoin(schema.devices, eq(schema.devices.id, schema.sessionRuns.deviceId))
       .where(deviceScope(schema.sessionRuns.deviceId, userId))
-      .orderBy(desc(schema.sessionRuns.lastSeenAt));
+      .orderBy(desc(isNull(schema.sessionRuns.endedAt)), desc(schema.sessionRuns.lastSeenAt))
+      .limit(limit);
     const taskRows = await db
       .select({
         issueId: schema.tasks.issueId,
@@ -1961,7 +1964,8 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         )), '[]')`,
       })
       .from(schema.tasks)
-      .orderBy(desc(schema.tasks.updatedAt));
+      .orderBy(desc(inArray(schema.tasks.status, ["open", "active"])), desc(schema.tasks.updatedAt))
+      .limit(limit);
     const pullRequestRows = await db
       .select({
         repo: schema.pullRequests.repo,
@@ -1996,9 +2000,11 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
         )), '[]')`,
       })
       .from(schema.pullRequests)
-      .orderBy(desc(schema.pullRequests.updatedAt));
+      .orderBy(desc(eq(schema.pullRequests.state, "open")), desc(schema.pullRequests.updatedAt))
+      .limit(limit);
     return c.render("Tasks/Index", {
       user: { email: c.get("principal").email ?? null },
+      limit,
       runs: runRows.map((run) => ({
         id: run.id,
         cliSessionId: run.cliSessionId,

@@ -588,7 +588,9 @@ export default function TasksIndex({
   devices,
   repositories,
   worktrees,
+  limit,
 }: {
+  limit: number;
   runs: Run[];
   tasks: Task[];
   pullRequests: PullRequest[];
@@ -653,6 +655,19 @@ export default function TasksIndex({
     filtered.conversationLinks.length;
   const nonCurrentTotal = filtered.nonCurrentTotal;
   const globalSearch = queryState.global ? "&global=true" : "";
+  const hasMore =
+    limit < 1000 &&
+    [runs, tasks, pullRequests, conversationLinks].some((records) => records.length === limit);
+  const loadMore = () => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("limit", String(limit * 2));
+    void router.get(`${window.location.pathname}?${params}`, undefined, {
+      replace: true,
+      preserveState: true,
+      preserveScroll: true,
+      only: ["limit", "runs", "tasks", "pullRequests", "conversationLinks"],
+    });
+  };
 
   useEffect(() => {
     if (query === initialQuery.current) return;
@@ -1685,6 +1700,11 @@ export default function TasksIndex({
           <p className="text-center text-sm text-muted-foreground">
             + {nonCurrentTotal} non-current
           </p>
+        ) : null}
+        {hasMore ? (
+          <Button className="w-fit self-center" variant="outline" onPress={loadMore}>
+            Load more
+          </Button>
         ) : null}
       </div>
     </main>

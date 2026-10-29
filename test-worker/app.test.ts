@@ -257,6 +257,31 @@ describe("wr Worker API", () => {
     expect(page.props.pullRequests.map((pullRequest) => pullRequest.number)).toEqual([2, 1]);
   });
 
+  test("limits top page records and keeps current records first", async () => {
+    const db = drizzle((env as unknown as Env).DB, { schema });
+    await request("/api/tasks", "limit-device", { issue: "OPEN-TASK" });
+    await request("/api/tasks", "limit-device", { issue: "DONE-TASK" });
+    await db
+      .update(schema.tasks)
+      .set({ status: "done", updatedAt: "2026-01-02 00:00:00" })
+      .where(eq(schema.tasks.issueId, "DONE-TASK"));
+    await db
+      .update(schema.tasks)
+      .set({ updatedAt: "2026-01-01 00:00:00" })
+      .where(eq(schema.tasks.issueId, "OPEN-TASK"));
+
+    const response = await app.request(
+      "/?limit=1",
+      { headers: { Accept: "text/html", "X-Inertia": "true", "X-Test-Token": "web" } },
+      env as unknown as Env,
+    );
+    const page = await response.json<{
+      props: { limit: number; tasks: Array<{ issueId: string }> };
+    }>();
+    expect(page.props.limit).toBe(1);
+    expect(page.props.tasks.map((task) => task.issueId)).toEqual(["OPEN-TASK"]);
+  });
+
   test("scopes resource lists to the current device by default", async () => {
     const payload = { session_id: "session-a", cwd: "/src/example", source: "startup" };
     expect(
