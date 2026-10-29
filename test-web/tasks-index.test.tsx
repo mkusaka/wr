@@ -80,6 +80,7 @@ const conversationLinks: ConversationLink[] = [
 ];
 const pageProps = {
   limit: 200,
+  total: 0,
   runs,
   tasks,
   pullRequests,
@@ -431,6 +432,7 @@ describe("TasksIndex", () => {
     );
     renderPage({
       limit: 200,
+      total: 0,
       runs: [],
       tasks: [],
       pullRequests,

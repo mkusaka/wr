@@ -276,9 +276,10 @@ describe("wr Worker API", () => {
       env as unknown as Env,
     );
     const page = await response.json<{
-      props: { limit: number; tasks: Array<{ issueId: string }> };
+      props: { limit: number; total: number; tasks: Array<{ issueId: string }> };
     }>();
     expect(page.props.limit).toBe(1);
+    expect(page.props.total).toBe(2);
     expect(page.props.tasks.map((task) => task.issueId)).toEqual(["OPEN-TASK"]);
   });
 

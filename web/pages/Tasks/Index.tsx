@@ -589,8 +589,10 @@ export default function TasksIndex({
   repositories,
   worktrees,
   limit,
+  total,
 }: {
   limit: number;
+  total: number;
   runs: Run[];
   tasks: Task[];
   pullRequests: PullRequest[];
@@ -647,7 +649,6 @@ export default function TasksIndex({
       worktree,
     ],
   );
-  const total = runs.length + tasks.length + pullRequests.length + conversationLinks.length;
   const filteredTotal =
     filtered.runs.length +
     filtered.tasks.length +
@@ -657,7 +658,7 @@ export default function TasksIndex({
   const globalSearch = queryState.global ? "&global=true" : "";
   const hasMore =
     limit < 1000 &&
-    [runs, tasks, pullRequests, conversationLinks].some((records) => records.length === limit);
+    runs.length + tasks.length + pullRequests.length + conversationLinks.length < total;
   const loadMore = () => {
     const params = new URLSearchParams(window.location.search);
     params.set("limit", String(limit * 2));

@@ -2002,9 +2002,18 @@ export function createApp(authenticate: Authenticator = authenticateAccess) {
       .from(schema.pullRequests)
       .orderBy(desc(eq(schema.pullRequests.state, "open")), desc(schema.pullRequests.updatedAt))
       .limit(limit);
+    const total = (
+      await Promise.all([
+        db.$count(schema.sessionRuns, deviceScope(schema.sessionRuns.deviceId, userId)),
+        db.$count(schema.tasks),
+        db.$count(schema.pullRequests),
+        db.$count(schema.conversationLinks, deviceScope(schema.conversationLinks.deviceId, userId)),
+      ])
+    ).reduce((sum, count) => sum + count, 0);
     return c.render("Tasks/Index", {
       user: { email: c.get("principal").email ?? null },
       limit,
+      total,
       runs: runRows.map((run) => ({
         id: run.id,
         cliSessionId: run.cliSessionId,
